@@ -79,6 +79,7 @@
 ### Task 5: ESWA SD2 Hook Script
 
 **Files:**
+- Create: `src/cci_diff/config.py`
 - Create: `scripts/run_sd2_cci_from_legacy.py`
 - Modify later in copied/derived script only: old `text_editing_SD2.py` loop
 
@@ -86,8 +87,8 @@
 - Consumes: JSON CCI config with target concept, desired value, preserved concepts, candidate concepts, weights, prompt, image path, mask path, and classifier path.
 - Produces: generated images plus `audit.json` containing concept scores, leakage, preservation, CCE-ready before/after classifier scores.
 
-- [ ] **Step 1: Write a config parsing test using a small JSON fixture.**
-- [ ] **Step 2: Implement config loading into `ConceptIntervention` and `GuidanceWeights`.**
+- [x] **Step 1: Write a config parsing test using a small JSON fixture.**
+- [x] **Step 2: Implement config loading into `ConceptIntervention` and `GuidanceWeights`.**
 - [ ] **Step 3: Add adapter command that can call the old SD2 script path without changing old files.**
 - [ ] **Step 4: Add optional in-loop hook only after the command wrapper works.**
 
@@ -101,6 +102,6 @@
 - Consumes: per-sample concept scores and classifier scores.
 - Produces: per-sample rows and aggregate bias audit matrix.
 
-- [ ] **Step 1: Write tests for JSON-serializable audit rows.**
-- [ ] **Step 2: Implement audit row and aggregate helpers using `metrics.py`.**
+- [x] **Step 1: Write tests for JSON-serializable audit rows.**
+- [x] **Step 2: Implement audit row and aggregate helpers using `metrics.py`.**
 - [ ] **Step 3: Add README example for interpreting the matrix.**
