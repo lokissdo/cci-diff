@@ -1,0 +1,26 @@
+{
+  "target_concept": "smile",
+  "desired_value": 1,
+  "preserved_concepts": [
+    "identity",
+    "hair",
+    "age-like appearance",
+    "gender presentation"
+  ],
+  "candidate_concepts": [
+    "smile",
+    "identity",
+    "hair",
+    "age-like appearance",
+    "gender presentation",
+    "makeup",
+    "eyeglasses"
+  ],
+  "weights": {
+    "target": 1.0,
+    "preservation": 1.0,
+    "leakage": 0.5,
+    "classifier": 1.0,
+    "outside_mask": 1.0
+  }
+}

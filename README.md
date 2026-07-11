@@ -18,6 +18,21 @@ the old pipeline wholesale.
 PYTHONPATH=src python3 -m unittest discover -s tests -v
 ```
 
+## Dry-Run The Legacy SD2 Bridge
+
+```bash
+PYTHONPATH=src python3 scripts/run_sd2_cci_from_legacy.py \
+  --cci_config examples/smile_intervention.json \
+  --legacy_script ../thesis_2025/bld_reranking/bld/scripts/text_editing_SD2.py \
+  --init_image data/1.jpg \
+  --mask data/1_mask.png \
+  --classifier_path models/classifier.pth \
+  --output_dir outputs/sample_1 \
+  --batch_size 2 \
+  --device cuda \
+  --dry-run
+```
+
 ## GPU Implementation Target
 
 The first GPU adapter should wrap the old SD2 inference loop in:

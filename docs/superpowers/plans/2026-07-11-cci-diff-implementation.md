@@ -89,7 +89,7 @@
 
 - [x] **Step 1: Write a config parsing test using a small JSON fixture.**
 - [x] **Step 2: Implement config loading into `ConceptIntervention` and `GuidanceWeights`.**
-- [ ] **Step 3: Add adapter command that can call the old SD2 script path without changing old files.**
+- [x] **Step 3: Add adapter command that can call the old SD2 script path without changing old files.**
 - [ ] **Step 4: Add optional in-loop hook only after the command wrapper works.**
 
 ### Task 6: Paper Experiment Outputs
