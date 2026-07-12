@@ -6,7 +6,7 @@
 
 **Architecture:** Keep framework-neutral research logic in `src/cci_diff`. Add the GPU-heavy SD2 adapter later as a thin wrapper around the old `thesis_2025` inference loop. The old code remains the reference implementation until the CCI hook is stable.
 
-**Tech Stack:** Python 3.11+, standard-library tests for the core; optional GPU dependencies are torch, torchvision, diffusers, open-clip-torch, Pillow, numpy, and OpenCV.
+**Tech Stack:** Python 3.10+, standard-library tests for the core; optional GPU dependencies are torch, torchvision, diffusers, open-clip-torch, Pillow, numpy, and OpenCV.
 
 ## Global Constraints
 
@@ -71,10 +71,10 @@
 - Consumes: `ConceptIntervention`, `GuidanceWeights`, `GuidanceTerms`, `compose_guidance_loss`
 - Produces: `apply_cci_latent_guidance(latents, decode_fn, loss_fn, weights, step_size, latent_mask=None)`
 
-- [ ] **Step 1: Write tests with a fake scalar/tensor object that proves the adapter calls decode, computes loss, and applies a gradient-like update.**
-- [ ] **Step 2: Implement a duck-typed adapter that imports torch only inside the function.**
-- [ ] **Step 3: Add a clear `ImportError` message when torch is unavailable.**
-- [ ] **Step 4: Run standard tests locally and GPU tests in Kaggle/Colab later.**
+- [x] **Step 1: Write tests with a fake scalar/tensor object that proves the adapter calls decode, computes loss, and applies a gradient-like update.**
+- [x] **Step 2: Implement a duck-typed adapter that imports torch only inside the function.**
+- [x] **Step 3: Add a clear `ImportError` message when torch is unavailable.**
+- [x] **Step 4: Run standard tests locally and GPU tests in Kaggle/Colab later.**
 
 ### Task 5: ESWA SD2 Hook Script
 
@@ -90,7 +90,29 @@
 - [x] **Step 1: Write a config parsing test using a small JSON fixture.**
 - [x] **Step 2: Implement config loading into `ConceptIntervention` and `GuidanceWeights`.**
 - [x] **Step 3: Add adapter command that can call the old SD2 script path without changing old files.**
-- [ ] **Step 4: Add optional in-loop hook only after the command wrapper works.**
+- [x] **Step 4: Add optional in-loop hook only after the command wrapper works.**
+
+### Task 5.5: Diffusion State Smoke Runner
+
+**Files:**
+- Create: `src/cci_diff/diffusion_state.py`
+- Create: `src/cci_diff/fake_backend.py`
+- Create: `src/cci_diff/diffusers_backend.py`
+- Create: `src/cci_diff/runner.py`
+- Create: `scripts/run_diffusion_smoke.py`
+- Test: `tests/test_diffusion_state.py`
+- Test: `tests/test_runner.py`
+- Test: `tests/test_diffusers_backend.py`
+
+**Interfaces:**
+- Consumes: JSON CCI config and backend choice.
+- Produces: generated sample image plus `audit.json` containing prompt, backend name, and per-step diffusion state records.
+
+- [x] **Step 1: Write failing tests for diffusion-state serialization, fake smoke generation, and missing optional ML dependencies.**
+- [x] **Step 2: Implement dependency-free fake backend for local smoke tests.**
+- [x] **Step 3: Implement optional `diffusers` backend with helpful install errors.**
+- [x] **Step 4: Add CLI script for fake or real backend smoke runs.**
+- [x] **Step 5: Set up local `.venv`, install the package editable, and run the fake smoke command.**
 
 ### Task 6: Paper Experiment Outputs
 

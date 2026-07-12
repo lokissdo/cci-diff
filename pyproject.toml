@@ -2,7 +2,7 @@
 name = "cci-diff"
 version = "0.1.0"
 description = "Causal Concept Intervention Diffusion utilities for bias-aware visual counterfactual explanations."
-requires-python = ">=3.11"
+requires-python = ">=3.10"
 dependencies = []
 
 [project.optional-dependencies]
@@ -10,6 +10,10 @@ ml = [
   "torch",
   "torchvision",
   "diffusers",
+  "huggingface_hub",
+  "transformers",
+  "accelerate",
+  "safetensors",
   "open-clip-torch",
   "pillow",
   "numpy",

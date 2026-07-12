@@ -4,7 +4,10 @@ __pycache__/
 .mypy_cache/
 .ruff_cache/
 .venv/
+.venv-ml/
 venv/
+archive/
+*.egg-info/
 outputs/
 data/
 checkpoints/

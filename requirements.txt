@@ -1,0 +1,16 @@
+# CCI-Diff SD2/BLD inference environment.
+# Python 3.10.19 is supported for this project.
+
+-e .
+
+torch
+torchvision
+diffusers
+huggingface_hub
+transformers
+accelerate
+safetensors
+open-clip-torch
+pillow
+numpy
+opencv-python
