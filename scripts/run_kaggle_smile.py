@@ -18,10 +18,10 @@ from typing import Sequence
 REPO_ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_MODEL = "sd2-community/stable-diffusion-2-1"
 DEFAULT_CCI_ASSET_ROOT = Path(
-    "/kaggle/input/datasets/a210462khihng/cci-assets"
+    "/kaggle/input/datasets/a210462khihng/cci-assets/versions/1"
 )
 DEFAULT_CELEBA_ROOT = Path(
-    "/kaggle/input/datasets/ipythonx/celebamaskhq/CelebAMask-HQ"
+    "/kaggle/input/datasets/ipythonx/celebamaskhq/versions/1/CelebAMask-HQ"
 )
 CLASSIFIER_PATH = DEFAULT_CCI_ASSET_ROOT / "resnet50_multilabel_model.pth"
 IDENTITY_MODEL_PATH = DEFAULT_CCI_ASSET_ROOT / "facenet_vggface2.ts"
@@ -108,6 +108,10 @@ def kaggle_assets() -> dict[str, Path]:
         "images": IMAGE_ROOT,
         "masks": MASK_ROOT,
     }
+    missing = [key for key, path in assets.items() if not path.exists()]
+    if missing:
+        details = ", ".join(f"{key}={assets[key]}" for key in missing)
+        raise FileNotFoundError(f"Invalid hardcoded Kaggle asset paths: {details}")
     print(f"[{timestamp()}] Kaggle assets:", flush=True)
     for key, path in assets.items():
         print(f"[{timestamp()}] FOUND {key}: {path}", flush=True)

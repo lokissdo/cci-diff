@@ -22,18 +22,19 @@ def test_parser_requires_explicit_mode_and_defaults_to_smile():
     assert args.model_path == "sd2-community/stable-diffusion-2-1"
     assert str(module.CLASSIFIER_PATH) == (
         "/kaggle/input/datasets/a210462khihng/cci-assets/"
-        "resnet50_multilabel_model.pth"
+        "versions/1/resnet50_multilabel_model.pth"
     )
     assert str(module.IDENTITY_MODEL_PATH) == (
-        "/kaggle/input/datasets/a210462khihng/cci-assets/facenet_vggface2.ts"
+        "/kaggle/input/datasets/a210462khihng/cci-assets/"
+        "versions/1/facenet_vggface2.ts"
     )
     assert str(module.IMAGE_ROOT) == (
         "/kaggle/input/datasets/ipythonx/celebamaskhq/"
-        "CelebAMask-HQ/CelebA-HQ-img"
+        "versions/1/CelebAMask-HQ/CelebA-HQ-img"
     )
     assert str(module.MASK_ROOT) == (
         "/kaggle/input/datasets/ipythonx/celebamaskhq/"
-        "CelebAMask-HQ/CelebAMask-HQ-mask-anno"
+        "versions/1/CelebAMask-HQ/CelebAMask-HQ-mask-anno"
     )
 
 
@@ -64,8 +65,16 @@ def test_run_logged_command_streams_stage_and_child_output(capfd):
     assert "DONE  test child" in output
 
 
-def test_kaggle_assets_uses_hardcoded_paths():
+def test_kaggle_assets_uses_and_validates_hardcoded_paths(tmp_path):
     module = load_script()
+    module.CLASSIFIER_PATH = tmp_path / "classifier.pth"
+    module.IDENTITY_MODEL_PATH = tmp_path / "identity.ts"
+    module.IMAGE_ROOT = tmp_path / "images"
+    module.MASK_ROOT = tmp_path / "masks"
+    module.CLASSIFIER_PATH.write_bytes(b"classifier")
+    module.IDENTITY_MODEL_PATH.write_bytes(b"identity")
+    module.IMAGE_ROOT.mkdir()
+    module.MASK_ROOT.mkdir()
 
     assert module.kaggle_assets() == {
         "classifier": module.CLASSIFIER_PATH,
@@ -73,3 +82,15 @@ def test_kaggle_assets_uses_hardcoded_paths():
         "images": module.IMAGE_ROOT,
         "masks": module.MASK_ROOT,
     }
+
+
+def test_kaggle_assets_rejects_invalid_hardcoded_path(tmp_path):
+    module = load_script()
+    module.CLASSIFIER_PATH = tmp_path / "missing.pth"
+
+    try:
+        module.kaggle_assets()
+    except FileNotFoundError as error:
+        assert "classifier" in str(error)
+    else:
+        raise AssertionError("Expected missing hardcoded path to fail")
