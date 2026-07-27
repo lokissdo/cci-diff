@@ -212,19 +212,56 @@ The two notebooks separate graph discovery from held-out generation:
 1. `notebooks/01_global_graph_discovery.ipynb` builds and freezes one global
    graph per target using a discovery cohort. Grad-CAM++ proposes no more than
    four regions, and same-seed interventions test region sets progressively.
-2. `notebooks/02_full_cci_fixed_vs_adaptive.ipynb` excludes the discovery IDs
-   and runs a matched three-arm comparison: raw BLD (`A0`), fixed-equal CCI
-   (`A2`), and adaptive-feedback CCI (`A3`).
+2. `notebooks/02_full_cci_fixed_vs_adaptive.ipynb` independently assumes the
+   reviewed region policy and runs a matched three-arm comparison: raw BLD
+   (`A0`), fixed-equal CCI (`A2`), and adaptive-feedback CCI (`A3`).
 
-Both notebooks default to 300 images for smile removal and 300 images for
-blond-hair addition, seed 42, CUDA, and float16 diffusion. Configure the path
-cell for the imported SD2 checkpoint, CelebA classifier, identity model, and
-CelebAMask-HQ dataset before running all cells. Outputs are written beneath
-`/kaggle/working`; completed rows are reused when a run is resumed.
+Both notebooks currently run the smile-removal task only and default to 300
+images, seed 42, CUDA, and float16 diffusion. They clone a pinned revision of
+this public repository, attach `ipythonx/celebamaskhq`, load
+`sd2-community/stable-diffusion-2-1` from Hugging Face, and read the classifier
+and identity checkpoints from the private `cci-assets` Kaggle dataset.
+Outputs are written beneath `/kaggle/working`; completed rows are reused when
+a run is resumed.
 
-The held-out policies are intentionally independent of graph discovery:
-smile removal uses `mouth + upper_lip + lower_lip`, while blond-hair addition
-uses `hair`. This isolates controller behavior from region-policy selection.
+Notebook 2 assumes the reviewed smile policy
+`mouth + upper_lip + lower_lip`, selects its own eligible cohort, and does not
+require Notebook 1 output. Experiment scripts run inline through `runpy`, with
+unbuffered timestamped progress printed in the active notebook cell. Git clone
+and dependency installation remain external setup commands.
+
+### Launch Kaggle Remotely
+
+Authenticate the official Kaggle CLI once, then run:
+
+```bash
+.venv-kaggle/bin/python scripts/run_kaggle_two_stage.py
+```
+
+The launcher uploads or versions the local `models/` directory as the private
+dataset `a210462khihng/cci-assets`, injects the current Git commit into both
+notebooks, and can run them sequentially. They remain independent and may also
+be started separately. Completed outputs are downloaded to
+`outputs/kaggle_remote/`.
+
+Useful controls:
+
+```bash
+# Validate packages and generated metadata without contacting Kaggle.
+.venv-kaggle/bin/python scripts/run_kaggle_two_stage.py --prepare_only
+
+# Start graph discovery and return immediately.
+.venv-kaggle/bin/python scripts/run_kaggle_two_stage.py --no_wait
+
+# Run Notebook 2 independently.
+.venv-kaggle/bin/python scripts/run_kaggle_two_stage.py \
+  --start_at evaluation \
+  --skip_datasets
+```
+
+The Kaggle and Hugging Face tokens are never included in uploaded files or
+kernel metadata. The selected Hugging Face model is public, so no Hugging Face
+secret is needed inside Kaggle.
 
 ## Run One-Pass Individual Region CCI
 

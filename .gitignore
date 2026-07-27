@@ -6,6 +6,7 @@ __pycache__/
 .venv/
 .venv-ml/
 .venv-facenet-export/
+.venv-kaggle/
 venv/
 archive/
 *.egg-info/

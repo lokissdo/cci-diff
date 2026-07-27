@@ -39,11 +39,9 @@ sufficient graph.
 
 ## Full CCI Evaluation
 
-The evaluation cohort is disjoint from graph discovery. For the requested
-independent benchmark, region policies are fixed:
-
-- remove smile: `mouth`, `upper_lip`, `lower_lip`;
-- add blond hair: `hair`.
+Notebook 2 is independent from graph discovery and selects its own evaluation
+cohort. For the current smile-only benchmark, the region policy is fixed to
+`mouth`, `upper_lip`, and `lower_lip`.
 
 Every source is run with identical seed, prompt, masks, scheduler, and model
 under three controller modes:
@@ -84,13 +82,15 @@ attribute receives a manually selected metric exemption.
 `notebooks/02_full_cci_fixed_vs_adaptive.ipynb`:
 
 - validates the same imported assets;
-- selects a disjoint evaluation cohort;
-- runs smile and hair with fixed region policies;
+- selects its own smile-removal evaluation cohort;
+- runs smile removal with the fixed mouth-and-lips region policy;
 - compares raw BLD (`disabled`), `fixed_equal`, and `feedback`;
 - writes source/output pairs and aggregate metrics.
 
-Both notebooks default to 300 images per task, CUDA, float16 diffusion, seed
-42, and configurable paths under `/kaggle/input` and `/kaggle/working`.
+Both notebooks default to 300 smile-removal images, CUDA, float16 diffusion,
+seed 42, and configurable paths under `/kaggle/input` and `/kaggle/working`.
+Experiment entry points execute inline through `runpy` and print unbuffered,
+timestamped progress in the active notebook cell.
 
 ## Validation
 

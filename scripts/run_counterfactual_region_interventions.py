@@ -187,7 +187,7 @@ def build_intervention_command(
 ) -> list[str]:
     """Build a clean-CCI command without any post-generation attack."""
 
-    return [
+    command = [
         args.python_executable,
         "scripts/run_sd2_bld_cci.py",
         "--output_dir",
@@ -235,6 +235,9 @@ def build_intervention_command(
         "--cci_controller_mode",
         "feedback",
     ]
+    if getattr(args, "allow_model_download", False):
+        command.remove("--local_files_only")
+    return command
 
 
 def load_completed_observation(
@@ -640,7 +643,7 @@ def validate_args(args: argparse.Namespace) -> None:
         if not path.is_file():
             raise FileNotFoundError(f"{name} not found: {path}")
     model_path = Path(args.model_path)
-    if not model_path.exists():
+    if not args.allow_model_download and not model_path.exists():
         raise FileNotFoundError(f"model_path not found: {model_path}")
     if args.num_inference_steps <= 0:
         raise ValueError("num_inference_steps must be positive")
@@ -665,6 +668,11 @@ def build_arg_parser() -> argparse.ArgumentParser:
         default="data/CelebAMask-HQ/CelebAMask-HQ-mask-anno",
     )
     parser.add_argument("--model_path", default="checkpoints/sd2-1-base")
+    parser.add_argument(
+        "--allow_model_download",
+        action="store_true",
+        help="Allow Diffusers to resolve model_path from Hugging Face.",
+    )
     parser.add_argument("--classifier_path", required=True)
     parser.add_argument("--identity_model_path", required=True)
     parser.add_argument("--output_dir", required=True)

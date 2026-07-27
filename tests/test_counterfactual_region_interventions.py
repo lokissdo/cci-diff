@@ -178,6 +178,34 @@ def test_build_intervention_command_uses_clean_feedback_without_post_attack(
     assert "post_attack" not in joined
 
 
+def test_build_intervention_command_can_download_public_model(tmp_path):
+    args = Namespace(
+        python_executable="python",
+        model_path="sd2-community/stable-diffusion-2-1",
+        allow_model_download=True,
+        device="cuda",
+        torch_dtype="float16",
+        num_inference_steps=35,
+        guidance_scale=5.0,
+        blending_start_percentage=0.25,
+        generation_mask_dilation=0,
+        generation_mask_feather=3.0,
+        classifier_path="classifier.pth",
+        identity_model_path="identity.ts",
+    )
+
+    command = build_intervention_command(
+        args,
+        graph_path=tmp_path / "graph.json",
+        binding_path=tmp_path / "binding.json",
+        output_dir=tmp_path / "run",
+        seed=42,
+        prompt="neutral expression",
+    )
+
+    assert "--local_files_only" not in command
+
+
 def test_load_completed_observation_reads_audit_and_spatial_metrics(tmp_path):
     graph, source, components = make_policy_inputs(tmp_path)
     run_dir = tmp_path / "run"

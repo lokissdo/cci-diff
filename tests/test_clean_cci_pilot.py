@@ -38,6 +38,44 @@ class TestCleanCCIPilot(unittest.TestCase):
         assert args.python_executable == sys.executable
         assert args.torch_dtype == "auto"
 
+    def test_variant_command_can_download_public_model(self):
+        from scripts.run_clean_cci_pilot import (
+            build_arg_parser,
+            build_variant_command,
+        )
+
+        args = build_arg_parser().parse_args(
+            [
+                "--features",
+                "smile",
+                "--classifier_path",
+                "classifier.pth",
+                "--identity_model_path",
+                "identity.ts",
+                "--output_dir",
+                "out",
+                "--model_path",
+                "sd2-community/stable-diffusion-2-1",
+                "--allow_model_download",
+            ]
+        )
+        command = build_variant_command(
+            args,
+            feature="smile",
+            variant="A0",
+            sample_id=0,
+            source=Path("source.jpg"),
+            masks={
+                "mouth": Path("mouth.png"),
+                "u_lip": Path("u_lip.png"),
+                "l_lip": Path("l_lip.png"),
+            },
+            binding_path=Path("binding.json"),
+            output_path=Path("output"),
+        )
+
+        self.assertNotIn("--local_files_only", command)
+
     def test_excluded_discovery_ids_are_loaded_per_feature(self):
         from scripts.run_clean_cci_pilot import load_excluded_ids
 

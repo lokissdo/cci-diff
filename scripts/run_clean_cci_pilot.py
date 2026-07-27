@@ -469,6 +469,8 @@ def build_variant_command(
         "--generation_mask_dilation",
         str(candidate.dilation),
     ]
+    if getattr(args, "allow_model_download", False):
+        common.remove("--local_files_only")
     if candidate.dilation_x is not None:
         common.extend(
             ["--generation_mask_dilation_x", str(candidate.dilation_x)]
@@ -1180,6 +1182,11 @@ def build_arg_parser() -> argparse.ArgumentParser:
         default="auto",
     )
     parser.add_argument("--model_path", default="checkpoints/sd2-1-base")
+    parser.add_argument(
+        "--allow_model_download",
+        action="store_true",
+        help="Allow Diffusers to resolve model_path from Hugging Face.",
+    )
     parser.add_argument("--classifier_path", required=True)
     parser.add_argument("--identity_model_path", required=True)
     parser.add_argument("--output_dir", required=True)
