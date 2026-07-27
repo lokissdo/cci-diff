@@ -7,6 +7,7 @@ from cci_diff.kaggle_remote import (
     is_ready_dataset_status,
     is_terminal_kernel_status,
     kernel_metadata,
+    prepare_diffusion_model_dataset,
     prepare_model_dataset,
 )
 
@@ -36,6 +37,32 @@ def test_prepare_model_dataset_rejects_missing_classifier(tmp_path):
     models.mkdir()
     with pytest.raises(FileNotFoundError, match="resnet50"):
         prepare_model_dataset(models, tmp_path / "staging", owner="owner")
+
+
+def test_prepare_diffusion_model_dataset_copies_complete_local_snapshot(tmp_path):
+    snapshot = tmp_path / "stable-diffusion-2-1"
+    snapshot.mkdir()
+    (snapshot / "model_index.json").write_text("{}")
+    for component in ("unet", "vae", "text_encoder", "tokenizer", "scheduler"):
+        directory = snapshot / component
+        directory.mkdir()
+        (directory / "config.json").write_text("{}")
+
+    destination = tmp_path / "staging"
+    prepare_diffusion_model_dataset(snapshot, destination, owner="owner")
+
+    assert (destination / "stable-diffusion-2-1" / "model_index.json").is_file()
+    metadata = json.loads((destination / "dataset-metadata.json").read_text())
+    assert metadata["id"] == "owner/cci-sd2-assets"
+
+
+def test_prepare_diffusion_model_dataset_rejects_incomplete_snapshot(tmp_path):
+    snapshot = tmp_path / "stable-diffusion-2-1"
+    snapshot.mkdir()
+    (snapshot / "model_index.json").write_text("{}")
+
+    with pytest.raises(FileNotFoundError, match="unet"):
+        prepare_diffusion_model_dataset(snapshot, tmp_path / "staging", owner="owner")
 
 
 def test_kernel_metadata_is_private_and_declares_sources():

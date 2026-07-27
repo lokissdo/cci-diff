@@ -71,6 +71,13 @@ def test_evaluation_slug_matches_kaggle_title():
     assert module.EVALUATION_SLUG == "cci-raw-bld-fixed-adaptive"
 
 
+def test_launcher_uses_separate_local_diffusion_dataset():
+    module = load_script()
+
+    assert module.DIFFUSION_DATASET_SLUG == "cci-sd2-assets"
+    assert module.DEFAULT_DIFFUSION_MODEL_DIR.name == "stable-diffusion-2-1"
+
+
 def test_parser_defaults_to_authenticated_owner_and_both_stages():
     module = load_script()
     args = module.build_parser().parse_args([])

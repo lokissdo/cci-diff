@@ -19,6 +19,7 @@ from cci_diff.kaggle_remote import (
     is_ready_dataset_status,
     is_terminal_kernel_status,
     kernel_metadata,
+    prepare_diffusion_model_dataset,
     prepare_model_dataset,
 )
 
@@ -28,6 +29,8 @@ PUBLIC_DATASET = "ipythonx/celebamaskhq"
 DEFAULT_REPO_URL = "https://github.com/lokissdo/cci-diff.git"
 DISCOVERY_SLUG = "cci-global-graph-discovery"
 EVALUATION_SLUG = "cci-raw-bld-fixed-adaptive"
+DIFFUSION_DATASET_SLUG = "cci-sd2-assets"
+DEFAULT_DIFFUSION_MODEL_DIR = REPO_ROOT / "models" / "stable-diffusion-2-1"
 
 
 def dataset_upload_command(
@@ -96,6 +99,12 @@ def build_parser() -> argparse.ArgumentParser:
         default=REPO_ROOT / "outputs" / "kaggle_remote",
     )
     parser.add_argument("--sample_count", type=int, default=300)
+    parser.add_argument(
+        "--diffusion_model_dir",
+        type=Path,
+        default=DEFAULT_DIFFUSION_MODEL_DIR,
+        help="Local complete SD 2.1 Diffusers snapshot to publish for Kaggle.",
+    )
     parser.add_argument("--poll_seconds", type=int, default=60)
     parser.add_argument("--timeout", type=int, default=43200)
     parser.add_argument(
@@ -267,12 +276,21 @@ def main() -> int:
         staging / "model_dataset",
         owner=args.owner,
     )
+    diffusion_dataset = prepare_diffusion_model_dataset(
+        args.diffusion_model_dir,
+        staging / "diffusion_model_dataset",
+        owner=args.owner,
+    )
 
     git_ref = args.git_ref or run(
         ["git", "rev-parse", "HEAD"],
         capture=True,
     ).strip()
-    datasets = (PUBLIC_DATASET, f"{args.owner}/cci-assets")
+    datasets = (
+        PUBLIC_DATASET,
+        f"{args.owner}/cci-assets",
+        f"{args.owner}/{DIFFUSION_DATASET_SLUG}",
+    )
     discovery_code = "01_global_graph_discovery.ipynb"
     evaluation_code = "02_full_cci_fixed_vs_adaptive.ipynb"
     discovery = prepare_kernel(
@@ -314,6 +332,12 @@ def main() -> int:
             f"{args.owner}/cci-assets",
             model_dataset,
             message="Update CCI evaluator assets",
+        )
+        upload_dataset(
+            kaggle,
+            f"{args.owner}/{DIFFUSION_DATASET_SLUG}",
+            diffusion_dataset,
+            message="Update CCI Stable Diffusion 2.1 assets",
         )
 
     if args.start_at == "discovery":
