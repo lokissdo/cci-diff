@@ -17,11 +17,9 @@ from typing import Sequence
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_MODEL = "sd2-community/stable-diffusion-2-1"
-DEFAULT_CCI_ASSET_ROOT = Path(
-    "/kaggle/input/datasets/a210462khihng/cci-assets/versions/1"
-)
+DEFAULT_CCI_ASSET_ROOT = Path("/kaggle/input/datasets/a210462khihng/cci-assets")
 DEFAULT_CELEBA_ROOT = Path(
-    "/kaggle/input/datasets/ipythonx/celebamaskhq/versions/1/CelebAMask-HQ"
+    "/kaggle/input/datasets/ipythonx/celebamaskhq/CelebAMask-HQ"
 )
 CLASSIFIER_PATH = DEFAULT_CCI_ASSET_ROOT / "resnet50_multilabel_model.pth"
 IDENTITY_MODEL_PATH = DEFAULT_CCI_ASSET_ROOT / "facenet_vggface2.ts"
@@ -95,8 +93,14 @@ def configure_runtime() -> None:
     os.environ["HF_HUB_VERBOSITY"] = "info"
     os.environ["DIFFUSERS_VERBOSITY"] = "info"
     os.environ.pop("HF_HUB_DISABLE_PROGRESS_BARS", None)
-    for path in (REPO_ROOT / "src", REPO_ROOT):
-        value = str(path)
+    repo_paths = [str(REPO_ROOT / "src"), str(REPO_ROOT)]
+    existing_paths = [
+        value
+        for value in os.environ.get("PYTHONPATH", "").split(os.pathsep)
+        if value and value not in repo_paths
+    ]
+    os.environ["PYTHONPATH"] = os.pathsep.join([*repo_paths, *existing_paths])
+    for value in repo_paths:
         if value not in sys.path:
             sys.path.insert(0, value)
 

@@ -1,4 +1,5 @@
 import importlib.util
+import os
 import sys
 from pathlib import Path
 
@@ -22,19 +23,19 @@ def test_parser_requires_explicit_mode_and_defaults_to_smile():
     assert args.model_path == "sd2-community/stable-diffusion-2-1"
     assert str(module.CLASSIFIER_PATH) == (
         "/kaggle/input/datasets/a210462khihng/cci-assets/"
-        "versions/1/resnet50_multilabel_model.pth"
+        "resnet50_multilabel_model.pth"
     )
     assert str(module.IDENTITY_MODEL_PATH) == (
         "/kaggle/input/datasets/a210462khihng/cci-assets/"
-        "versions/1/facenet_vggface2.ts"
+        "facenet_vggface2.ts"
     )
     assert str(module.IMAGE_ROOT) == (
         "/kaggle/input/datasets/ipythonx/celebamaskhq/"
-        "versions/1/CelebAMask-HQ/CelebA-HQ-img"
+        "CelebAMask-HQ/CelebA-HQ-img"
     )
     assert str(module.MASK_ROOT) == (
         "/kaggle/input/datasets/ipythonx/celebamaskhq/"
-        "versions/1/CelebAMask-HQ/CelebAMask-HQ-mask-anno"
+        "CelebAMask-HQ/CelebAMask-HQ-mask-anno"
     )
 
 
@@ -63,6 +64,20 @@ def test_run_logged_command_streams_stage_and_child_output(capfd):
     assert "START test child" in output
     assert "visible-child-output" in output
     assert "DONE  test child" in output
+
+
+def test_configure_runtime_exports_repo_paths_to_child_processes(monkeypatch):
+    module = load_script()
+    monkeypatch.setenv("PYTHONPATH", "/existing/packages")
+
+    module.configure_runtime()
+
+    python_paths = os.environ["PYTHONPATH"].split(os.pathsep)
+    assert python_paths[:2] == [
+        str(module.REPO_ROOT / "src"),
+        str(module.REPO_ROOT),
+    ]
+    assert python_paths[2:] == ["/existing/packages"]
 
 
 def test_kaggle_assets_uses_and_validates_hardcoded_paths(tmp_path):
