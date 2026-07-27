@@ -2,9 +2,6 @@ import importlib.util
 import sys
 from pathlib import Path
 
-import pytest
-
-
 SCRIPT = Path(__file__).resolve().parents[1] / "scripts" / "run_kaggle_smile.py"
 
 
@@ -23,6 +20,21 @@ def test_parser_requires_explicit_mode_and_defaults_to_smile():
     assert args.mode == "evaluation"
     assert args.sample_count == 300
     assert args.model_path == "sd2-community/stable-diffusion-2-1"
+    assert str(module.CLASSIFIER_PATH) == (
+        "/kaggle/input/datasets/a210462khihng/cci-assets/"
+        "resnet50_multilabel_model.pth"
+    )
+    assert str(module.IDENTITY_MODEL_PATH) == (
+        "/kaggle/input/datasets/a210462khihng/cci-assets/facenet_vggface2.ts"
+    )
+    assert str(module.IMAGE_ROOT) == (
+        "/kaggle/input/datasets/ipythonx/celebamaskhq/"
+        "CelebAMask-HQ/CelebA-HQ-img"
+    )
+    assert str(module.MASK_ROOT) == (
+        "/kaggle/input/datasets/ipythonx/celebamaskhq/"
+        "CelebAMask-HQ/CelebAMask-HQ-mask-anno"
+    )
 
 
 def test_standalone_runner_exposes_setup_and_model_download_logs():
@@ -32,9 +44,10 @@ def test_standalone_runner_exposes_setup_and_model_download_logs():
     assert "--progress-bar" in source
     assert "HF_HUB_VERBOSITY" in source
     assert "DIFFUSERS_VERBOSITY" in source
-    assert "START setup:" in source
+    assert "Kaggle assets:" in source
     assert "FOUND {key}" in source
     assert "capture_output" not in source
+    assert ".rglob(" not in source
 
 
 def test_run_logged_command_streams_stage_and_child_output(capfd):
@@ -51,17 +64,12 @@ def test_run_logged_command_streams_stage_and_child_output(capfd):
     assert "DONE  test child" in output
 
 
-def test_resolve_unique_finds_nested_kaggle_asset(tmp_path):
-    module = load_script()
-    asset = tmp_path / "mounted-dataset" / "checkpoint.pth"
-    asset.parent.mkdir()
-    asset.write_bytes(b"model")
-
-    assert module.resolve_unique(tmp_path, "checkpoint.pth") == asset
-
-
-def test_resolve_unique_rejects_missing_asset(tmp_path):
+def test_kaggle_assets_uses_hardcoded_paths():
     module = load_script()
 
-    with pytest.raises(FileNotFoundError, match="checkpoint.pth"):
-        module.resolve_unique(tmp_path, "checkpoint.pth")
+    assert module.kaggle_assets() == {
+        "classifier": module.CLASSIFIER_PATH,
+        "identity": module.IDENTITY_MODEL_PATH,
+        "images": module.IMAGE_ROOT,
+        "masks": module.MASK_ROOT,
+    }

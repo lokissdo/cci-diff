@@ -17,6 +17,16 @@ from typing import Sequence
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_MODEL = "sd2-community/stable-diffusion-2-1"
+DEFAULT_CCI_ASSET_ROOT = Path(
+    "/kaggle/input/datasets/a210462khihng/cci-assets"
+)
+DEFAULT_CELEBA_ROOT = Path(
+    "/kaggle/input/datasets/ipythonx/celebamaskhq/CelebAMask-HQ"
+)
+CLASSIFIER_PATH = DEFAULT_CCI_ASSET_ROOT / "resnet50_multilabel_model.pth"
+IDENTITY_MODEL_PATH = DEFAULT_CCI_ASSET_ROOT / "facenet_vggface2.ts"
+IMAGE_ROOT = DEFAULT_CELEBA_ROOT / "CelebA-HQ-img"
+MASK_ROOT = DEFAULT_CELEBA_ROOT / "CelebAMask-HQ-mask-anno"
 PACKAGE_MODULES = {
     "diffusers": "diffusers",
     "transformers": "transformers",
@@ -56,15 +66,6 @@ def run_logged_command(
     )
 
 
-def resolve_unique(root: str | Path, name: str) -> Path:
-    matches = sorted(Path(root).rglob(name))
-    if len(matches) != 1:
-        raise FileNotFoundError(
-            f"Expected exactly one {name!r} under {root}, found: {matches}"
-        )
-    return matches[0]
-
-
 def ensure_runtime_packages() -> None:
     missing = [
         package
@@ -100,17 +101,16 @@ def configure_runtime() -> None:
             sys.path.insert(0, value)
 
 
-def resolve_assets(input_root: Path) -> dict[str, Path]:
-    print(f"[{timestamp()}] START setup: resolve Kaggle input assets", flush=True)
+def kaggle_assets() -> dict[str, Path]:
     assets = {
-        "classifier": resolve_unique(input_root, "resnet50_multilabel_model.pth"),
-        "identity": resolve_unique(input_root, "facenet_vggface2.ts"),
-        "images": resolve_unique(input_root, "CelebA-HQ-img"),
-        "masks": resolve_unique(input_root, "CelebAMask-HQ-mask-anno"),
+        "classifier": CLASSIFIER_PATH,
+        "identity": IDENTITY_MODEL_PATH,
+        "images": IMAGE_ROOT,
+        "masks": MASK_ROOT,
     }
+    print(f"[{timestamp()}] Kaggle assets:", flush=True)
     for key, path in assets.items():
         print(f"[{timestamp()}] FOUND {key}: {path}", flush=True)
-    print(f"[{timestamp()}] DONE  setup: resolve Kaggle input assets", flush=True)
     return assets
 
 
@@ -333,7 +333,6 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--mode", choices=("discovery", "evaluation"), required=True)
     parser.add_argument("--sample_count", type=int, default=300)
     parser.add_argument("--model_path", default=DEFAULT_MODEL)
-    parser.add_argument("--input_root", type=Path, default=Path("/kaggle/input"))
     parser.add_argument("--output_dir", default=None)
     parser.add_argument("--device", default="cuda")
     parser.add_argument("--num_inference_steps", type=int, default=35)
@@ -352,7 +351,7 @@ def main() -> int:
         flush=True,
     )
     ensure_runtime_packages()
-    assets = resolve_assets(args.input_root)
+    assets = kaggle_assets()
     if args.mode == "discovery":
         run_discovery(args, assets)
     else:
