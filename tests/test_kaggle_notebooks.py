@@ -15,57 +15,42 @@ def notebook_source(name: str) -> str:
     )
 
 
+def assert_standalone_command_contract(source: str, *, mode: str) -> None:
+    assert "run_kaggle_smile.py" in source
+    assert "'-u'" in source
+    assert f"'--mode', '{mode}'" in source
+    assert "subprocess.run(command, check=True)" in source
+    assert "'-q'" not in source
+    assert "runtime_packages" not in source
+
+
 def test_global_discovery_notebook_is_two_task_resumable_and_max_four():
     source = notebook_source("01_global_graph_discovery.ipynb")
 
+    assert_standalone_command_contract(source, mode="discovery")
     assert "MODEL_PATH = 'sd2-community/stable-diffusion-2-1'" in source
     assert "https://github.com/lokissdo/cci-diff.git" in source
     assert "GIT_REF = 'main'" in source
     assert "'git', 'clone'" in source
-    assert "rglob('CelebA-HQ-img')" in source
-    assert "rglob('CelebAMask-HQ-mask-anno')" in source
-    assert "/kaggle/input/cci-assets" in source
     assert "/kaggle/input/cci-sd2-assets" not in source
-    assert "--allow_model_download" in source
     assert "SAMPLE_COUNT = 300" in source
     assert "MAX_SELECTED_REGIONS = 4" in source
     assert "STOP_FLIP_RATE = 0.96" in source
     assert "'smile'" in source
     assert "'hair': {" not in source
-    assert "runpy.run_path" in source
     assert "PYTHONUNBUFFERED" in source
-    assert "screen_counterfactual_regions.py" in source
-    assert "run_counterfactual_region_interventions.py" in source
-    assert "discover_counterfactual_graph.py" in source
-    assert "discovery_ids.json" in source
     assert "cuda" in source
 
 
 def test_full_cci_notebook_is_standalone_with_assumed_region_policy():
     source = notebook_source("02_full_cci_fixed_vs_adaptive.ipynb")
 
+    assert_standalone_command_contract(source, mode="evaluation")
     assert "MODEL_PATH = 'sd2-community/stable-diffusion-2-1'" in source
     assert "https://github.com/lokissdo/cci-diff.git" in source
     assert "GIT_REF = 'main'" in source
     assert "'git', 'clone'" in source
-    assert "rglob('CelebA-HQ-img')" in source
-    assert "rglob('CelebAMask-HQ-mask-anno')" in source
     assert "/kaggle/input/cci-sd2-assets" not in source
-    assert "--allow_model_download" in source
-    assert "ASSUMED_REGIONS" in source
-    assert "discovery_ids.json" not in source
     assert "SAMPLE_COUNT = 300" in source
-    assert "'--features', 'smile'" in source
-    assert "'--features', 'smile', 'hair'" not in source
-    assert "runpy.run_path" in source
     assert "PYTHONUNBUFFERED" in source
-    assert "--controller_modes" in source
-    assert "'disabled'" in source
-    assert "'fixed_equal'" in source
-    assert "'feedback'" in source
-    assert "--exclude_ids_json" not in source
-    assert "'mouth', 'upper_lip', 'lower_lip'" in source
-    assert "'hair'" not in source
-    assert "pilot_results.csv" in source
-    assert "'A0': 'raw_bld'" in source
     assert "cuda" in source
