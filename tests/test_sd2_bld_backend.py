@@ -273,7 +273,14 @@ class TestSD2BLDBackendContract(unittest.TestCase):
             backend_module,
             "require_sd2_dependencies",
             return_value=(FakeTorch, object(), object(), FakeScheduler, FakePipelineFactory),
-        ):
+        ), mock.patch(
+            "transformers.utils.logging.is_progress_bar_enabled",
+            return_value=True,
+        ), mock.patch(
+            "transformers.utils.logging.disable_progress_bar"
+        ) as disable_progress, mock.patch(
+            "transformers.utils.logging.enable_progress_bar"
+        ) as enable_progress:
             backend = backend_module.BlendedLatentDiffusionSD2Backend(
                 model_path="local-sd2",
                 device="cuda",
@@ -297,6 +304,8 @@ class TestSD2BLDBackendContract(unittest.TestCase):
         )
         self.assertTrue(FakePipelineFactory.last_pipeline.unet.eval_called)
         self.assertFalse(FakePipelineFactory.last_pipeline.unet.requires_grad_value)
+        disable_progress.assert_called_once_with()
+        enable_progress.assert_called_once_with()
 
     def test_read_mask_uses_configured_float32_dtype(self):
         try:

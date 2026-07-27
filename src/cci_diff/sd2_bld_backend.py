@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Callable
@@ -44,6 +45,26 @@ def require_sd2_dependencies():
             "pip install -e '.[ml]'"
         ) from exc
     return torch, np, Image, DDIMScheduler, DiffusionPipeline
+
+
+@contextmanager
+def suppress_transformers_progress():
+    """Hide per-parameter model loading bars and restore the prior setting."""
+
+    try:
+        from transformers.utils import logging as transformers_logging
+    except ImportError:
+        yield
+        return
+
+    was_enabled = transformers_logging.is_progress_bar_enabled()
+    if was_enabled:
+        transformers_logging.disable_progress_bar()
+    try:
+        yield
+    finally:
+        if was_enabled:
+            transformers_logging.enable_progress_bar()
 
 
 def blending_start_index(num_timesteps: int, blending_percentage: float) -> int:
@@ -165,12 +186,13 @@ class BlendedLatentDiffusionSD2Backend:
         torch, _, _, scheduler_cls, pipeline_cls = require_sd2_dependencies()
         dtype = _resolve_torch_dtype(torch, torch_dtype)
         try:
-            pipe = pipeline_cls.from_pretrained(
-                model_path,
-                torch_dtype=dtype,
-                safety_checker=None,
-                local_files_only=local_files_only,
-            )
+            with suppress_transformers_progress():
+                pipe = pipeline_cls.from_pretrained(
+                    model_path,
+                    torch_dtype=dtype,
+                    safety_checker=None,
+                    local_files_only=local_files_only,
+                )
         except OSError as exc:
             raise OSError(
                 f"Cannot load SD2 model from {model_path!r}. "
