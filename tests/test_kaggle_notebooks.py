@@ -18,16 +18,15 @@ def notebook_source(name: str) -> str:
 def test_global_discovery_notebook_is_two_task_resumable_and_max_four():
     source = notebook_source("01_global_graph_discovery.ipynb")
 
-    assert "Path('/kaggle/input/cci-sd2-assets')" in source
-    assert "DIFFUSION_ASSET_ROOT / 'stable-diffusion-2-1'" in source
+    assert "MODEL_PATH = 'sd2-community/stable-diffusion-2-1'" in source
     assert "https://github.com/lokissdo/cci-diff.git" in source
     assert "GIT_REF = 'main'" in source
     assert "'git', 'clone'" in source
     assert "rglob('CelebA-HQ-img')" in source
     assert "rglob('CelebAMask-HQ-mask-anno')" in source
     assert "/kaggle/input/cci-assets" in source
-    assert "/kaggle/input/cci-sd2-assets" in source
-    assert "--allow_model_download" not in source
+    assert "/kaggle/input/cci-sd2-assets" not in source
+    assert "--allow_model_download" in source
     assert "SAMPLE_COUNT = 300" in source
     assert "MAX_SELECTED_REGIONS = 4" in source
     assert "STOP_FLIP_RATE = 0.96" in source
@@ -45,15 +44,14 @@ def test_global_discovery_notebook_is_two_task_resumable_and_max_four():
 def test_full_cci_notebook_is_standalone_with_assumed_region_policy():
     source = notebook_source("02_full_cci_fixed_vs_adaptive.ipynb")
 
-    assert "Path('/kaggle/input/cci-sd2-assets')" in source
-    assert "DIFFUSION_ASSET_ROOT / 'stable-diffusion-2-1'" in source
+    assert "MODEL_PATH = 'sd2-community/stable-diffusion-2-1'" in source
     assert "https://github.com/lokissdo/cci-diff.git" in source
     assert "GIT_REF = 'main'" in source
     assert "'git', 'clone'" in source
     assert "rglob('CelebA-HQ-img')" in source
     assert "rglob('CelebAMask-HQ-mask-anno')" in source
-    assert "/kaggle/input/cci-sd2-assets" in source
-    assert "--allow_model_download" not in source
+    assert "/kaggle/input/cci-sd2-assets" not in source
+    assert "--allow_model_download" in source
     assert "ASSUMED_REGIONS" in source
     assert "discovery_ids.json" not in source
     assert "SAMPLE_COUNT = 300" in source

@@ -14,14 +14,6 @@ REQUIRED_MODEL_FILES = (
     "facenet_vggface2.ts.json",
 )
 
-REQUIRED_DIFFUSION_COMPONENTS = (
-    "unet",
-    "vae",
-    "text_encoder",
-    "tokenizer",
-    "scheduler",
-)
-
 def prepare_model_dataset(
     models_root: str | Path,
     destination: str | Path,
@@ -45,35 +37,6 @@ def prepare_model_dataset(
             owner=owner,
             slug="cci-assets",
             title="CCI Evaluator Assets",
-        ),
-    )
-    return output
-
-
-def prepare_diffusion_model_dataset(
-    snapshot_root: str | Path,
-    destination: str | Path,
-    *,
-    owner: str,
-) -> Path:
-    """Create a private Kaggle payload containing one offline Diffusers snapshot."""
-
-    root = Path(snapshot_root).resolve()
-    required = ("model_index.json", *REQUIRED_DIFFUSION_COMPONENTS)
-    missing = [name for name in required if not (root / name).exists()]
-    if missing:
-        raise FileNotFoundError(
-            "Incomplete Diffusers model snapshot; missing: " + ", ".join(missing)
-        )
-    output = _reset_directory(destination)
-    target = output / root.name
-    shutil.copytree(root, target)
-    _write_json(
-        output / "dataset-metadata.json",
-        _dataset_metadata(
-            owner=owner,
-            slug="cci-sd2-assets",
-            title="CCI Stable Diffusion 2.1 Assets",
         ),
     )
     return output

@@ -218,11 +218,9 @@ The two notebooks separate graph discovery from held-out generation:
 
 Both notebooks currently run the smile-removal task only and default to 300
 images, seed 42, CUDA, and float16 diffusion. They clone a pinned revision of
-this public repository, attach `ipythonx/celebamaskhq`, and read all model
-weights from private Kaggle datasets. `cci-assets` contains the classifier and
-identity checkpoints; `cci-sd2-assets` contains the complete local
-`stable-diffusion-2-1` Diffusers snapshot. The notebooks use local-only model
-loading and do not download Stable Diffusion from Hugging Face at runtime.
+this public repository, attach `ipythonx/celebamaskhq`, load
+`sd2-community/stable-diffusion-2-1` from Hugging Face, and read the classifier
+and identity checkpoints from the private `cci-assets` Kaggle dataset.
 Outputs are written beneath `/kaggle/working`; completed rows are reused when
 a run is resumed.
 
@@ -241,20 +239,10 @@ Authenticate the official Kaggle CLI once, then run:
 ```
 
 The launcher uploads or versions the local evaluator files in `models/` as the
-private dataset `a210462khihng/cci-assets`, and uploads the local Diffusers
-snapshot at `models/stable-diffusion-2-1/` as
-`a210462khihng/cci-sd2-assets`. It injects the current Git commit into both
-notebooks and can run them sequentially. They remain independent and may also
-be started separately. Completed outputs are downloaded to
+private dataset `a210462khihng/cci-assets`, injects the current Git commit into
+both notebooks, and can run them sequentially. They remain independent and may
+also be started separately. Completed outputs are downloaded to
 `outputs/kaggle_remote/`.
-
-Download the Diffusers snapshot once before the first dataset upload:
-
-```bash
-.venv-ml/bin/python scripts/download_hf_model.py \
-  --model_id sd2-community/stable-diffusion-2-1 \
-  --local_dir models/stable-diffusion-2-1
-```
 
 Useful controls:
 
