@@ -32,6 +32,21 @@ def test_prepare_model_dataset_requires_and_copies_local_models(tmp_path):
     assert metadata["id"] == "owner/cci-assets"
 
 
+def test_prepare_model_dataset_excludes_diffusion_snapshot(tmp_path):
+    models = tmp_path / "models"
+    models.mkdir()
+    for name in REQUIRED_MODEL_FILES:
+        (models / name).write_bytes(name.encode())
+    snapshot = models / "stable-diffusion-2-1"
+    snapshot.mkdir()
+    (snapshot / "model_index.json").write_text("{}")
+
+    destination = tmp_path / "staging"
+    prepare_model_dataset(models, destination, owner="owner")
+
+    assert not (destination / "stable-diffusion-2-1").exists()
+
+
 def test_prepare_model_dataset_rejects_missing_classifier(tmp_path):
     models = tmp_path / "models"
     models.mkdir()

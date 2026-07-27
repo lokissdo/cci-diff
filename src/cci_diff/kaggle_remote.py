@@ -37,13 +37,8 @@ def prepare_model_dataset(
             "Missing required evaluator models: " + ", ".join(missing)
         )
     output = _reset_directory(destination)
-    for source in sorted(root.rglob("*")):
-        if not source.is_file():
-            continue
-        relative = source.relative_to(root)
-        target = output / relative
-        target.parent.mkdir(parents=True, exist_ok=True)
-        shutil.copy2(source, target)
+    for name in REQUIRED_MODEL_FILES:
+        shutil.copy2(root / name, output / name)
     _write_json(
         output / "dataset-metadata.json",
         _dataset_metadata(
