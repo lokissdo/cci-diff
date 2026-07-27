@@ -1,0 +1,6 @@
+{
+  "source_image": "data/CelebAMask-HQ/CelebA-HQ-img/0.jpg",
+  "masks": {
+    "hair": "data/CelebAMask-HQ/CelebAMask-HQ-mask-anno/0/00000_hair.png"
+  }
+}

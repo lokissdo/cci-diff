@@ -19,6 +19,8 @@ class GuidanceTerms:
     leakage: Scalar
     classifier: Scalar
     outside_mask: Scalar
+    clip: Scalar = 0.0
+    smooth: Scalar = 0.0
 
 
 def compose_guidance_loss(terms: GuidanceTerms, weights: GuidanceWeights):
@@ -34,4 +36,6 @@ def compose_guidance_loss(terms: GuidanceTerms, weights: GuidanceWeights):
         + weights.leakage * terms.leakage
         + weights.classifier * terms.classifier
         + weights.outside_mask * terms.outside_mask
+        + weights.clip * terms.clip
+        + weights.smooth * terms.smooth
     )

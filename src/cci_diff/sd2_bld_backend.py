@@ -24,6 +24,9 @@ class SD2DenoisingStep:
     noise_pred: Any
     source_latents: Any
     latent_mask: Any
+    semantic_mask: Any | None = None
+    total_steps: int = 1
+    progress: float = 0.0
 
 
 def require_sd2_dependencies():
@@ -50,6 +53,16 @@ def blending_start_index(num_timesteps: int, blending_percentage: float) -> int:
         raise ValueError("num_timesteps must be positive")
     raw_index = int(num_timesteps * blending_percentage)
     return max(0, min(num_timesteps - 1, raw_index))
+
+
+def denoising_progress(step_index: int, total_steps: int) -> float:
+    """Normalize a step over the selected reverse-diffusion interval."""
+
+    if total_steps <= 0:
+        raise ValueError("total_steps must be positive")
+    if step_index < 0 or step_index >= total_steps:
+        raise ValueError("step_index must be inside the selected reverse interval")
+    return step_index / max(total_steps - 1, 1)
 
 
 def apply_cci_guidance(
@@ -91,6 +104,9 @@ def diffusion_state_from_step(step: SD2DenoisingStep, *, phase: str) -> Diffusio
             "noise_pred_shape": _shape_tuple(step.noise_pred),
             "source_latent_shape": _shape_tuple(step.source_latents),
             "mask_shape": _shape_tuple(step.latent_mask),
+            "semantic_mask_shape": _shape_tuple(step.semantic_mask),
+            "total_steps": step.total_steps,
+            "progress": step.progress,
         },
     )
 
@@ -109,6 +125,20 @@ def blend_soft_latents(
     """Interpolate edited and source latents with a fractional mask."""
 
     return generation_mask * edited_latents + (1.0 - generation_mask) * source_latents
+
+
+def seeded_noise_like(reference: Any, generator: Any) -> Any:
+    """Draw reference-shaped noise from an explicit reproducible generator."""
+
+    import torch
+
+    return torch.randn(
+        reference.shape,
+        generator=generator,
+        device=reference.device,
+        dtype=reference.dtype,
+        layout=reference.layout,
+    )
 
 
 def replace_nonfinite_latents(latents: Any, fallback_latents: Any) -> Any:
@@ -172,6 +202,7 @@ class BlendedLatentDiffusionSD2Backend:
         init_image: str | Path,
         mask: str | Path,
         generation_mask: str | Path | None = None,
+        semantic_mask: str | Path | None = None,
         prompt: str,
         output_path: str | Path,
         batch_size: int = 4,
@@ -195,8 +226,18 @@ class BlendedLatentDiffusionSD2Backend:
             dest_size=(height // 8, width // 8),
             binary=generation_mask is None,
         )
+        semantic_latent_mask = (
+            self._read_mask(
+                semantic_mask,
+                dest_size=(height // 8, width // 8),
+                binary=True,
+            )
+            if semantic_mask is not None
+            else (latent_mask >= 0.5).to(latent_mask.dtype)
+        )
         source_latents = source_latents.repeat((batch_size, 1, 1, 1))
         latent_mask = latent_mask.repeat((batch_size, 1, 1, 1))
+        semantic_latent_mask = semantic_latent_mask.repeat((batch_size, 1, 1, 1))
 
         text_embeddings = self._encode_prompts(prompts)
         generator = torch.Generator(device=self.device).manual_seed(seed)
@@ -212,7 +253,10 @@ class BlendedLatentDiffusionSD2Backend:
         )
 
         states: list[DiffusionState] = []
-        for step_index, timestep in enumerate(timesteps[start_index:]):
+        selected_timesteps = timesteps[start_index:]
+        total_steps = len(selected_timesteps)
+        for step_index, timestep in enumerate(selected_timesteps):
+            progress = denoising_progress(step_index, total_steps)
             latent_model_input = torch.cat([latents] * 2)
             latent_model_input = self.scheduler.scale_model_input(
                 latent_model_input,
@@ -236,6 +280,9 @@ class BlendedLatentDiffusionSD2Backend:
                 noise_pred=noise_pred,
                 source_latents=source_latents,
                 latent_mask=latent_mask,
+                semantic_mask=semantic_latent_mask,
+                total_steps=total_steps,
+                progress=progress,
             )
             noise_pred = apply_cci_guidance(noise_pred, step, cci_guidance_hook)
             step = SD2DenoisingStep(
@@ -246,6 +293,9 @@ class BlendedLatentDiffusionSD2Backend:
                 noise_pred=noise_pred,
                 source_latents=source_latents,
                 latent_mask=latent_mask,
+                semantic_mask=semantic_latent_mask,
+                total_steps=total_steps,
+                progress=progress,
             )
             states.append(diffusion_state_from_step(step, phase="cci_guidance"))
 
@@ -258,10 +308,17 @@ class BlendedLatentDiffusionSD2Backend:
                 noise_pred=noise_pred,
                 source_latents=source_latents,
                 latent_mask=latent_mask,
+                semantic_mask=semantic_latent_mask,
+                total_steps=total_steps,
+                progress=progress,
             )
             states.append(diffusion_state_from_step(step, phase="scheduler_step"))
 
-            if cci_latent_guidance_hook is not None:
+            if cci_latent_guidance_hook is not None and not getattr(
+                cci_latent_guidance_hook,
+                "apply_after_blend",
+                False,
+            ):
                 latents = apply_cci_latent_guidance_hook(
                     latents,
                     step,
@@ -275,6 +332,9 @@ class BlendedLatentDiffusionSD2Backend:
                     noise_pred=noise_pred,
                     source_latents=source_latents,
                     latent_mask=latent_mask,
+                    semantic_mask=semantic_latent_mask,
+                    total_steps=total_steps,
+                    progress=progress,
                 )
                 states.append(
                     diffusion_state_from_step(step, phase="cci_latent_guidance")
@@ -282,7 +342,7 @@ class BlendedLatentDiffusionSD2Backend:
 
             noise_source_latents = self.scheduler.add_noise(
                 source_latents,
-                torch.randn_like(latents),
+                seeded_noise_like(latents, generator),
                 timestep,
             )
             latents = replace_nonfinite_latents(latents, noise_source_latents)
@@ -295,6 +355,28 @@ class BlendedLatentDiffusionSD2Backend:
                     noise_source_latents,
                 )
             latents = replace_nonfinite_latents(latents, noise_source_latents)
+            if cci_latent_guidance_hook is not None and getattr(
+                cci_latent_guidance_hook,
+                "apply_after_blend",
+                False,
+            ):
+                post_blend_step = SD2DenoisingStep(
+                    step_index=step_index,
+                    timestep=timestep,
+                    prompt=prompt,
+                    latents=latents,
+                    noise_pred=noise_pred,
+                    source_latents=source_latents,
+                    latent_mask=latent_mask,
+                    semantic_mask=semantic_latent_mask,
+                    total_steps=total_steps,
+                    progress=progress,
+                )
+                latents = apply_cci_latent_guidance_hook(
+                    latents,
+                    post_blend_step,
+                    cci_latent_guidance_hook,
+                )
             step = SD2DenoisingStep(
                 step_index=step_index,
                 timestep=timestep,
@@ -303,6 +385,9 @@ class BlendedLatentDiffusionSD2Backend:
                 noise_pred=noise_pred,
                 source_latents=source_latents,
                 latent_mask=latent_mask,
+                semantic_mask=semantic_latent_mask,
+                total_steps=total_steps,
+                progress=progress,
             )
             states.append(diffusion_state_from_step(step, phase="blend"))
 
@@ -389,7 +474,7 @@ class BlendedLatentDiffusionSD2Backend:
         if mode == "source_noise":
             return self.scheduler.add_noise(
                 source_latents,
-                torch.randn_like(source_latents),
+                seeded_noise_like(source_latents, generator),
                 start_timestep,
             )
         raise ValueError("initial_latent_mode must be random or source_noise")

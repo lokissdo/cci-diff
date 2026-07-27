@@ -40,6 +40,8 @@ class GuidanceWeights:
     leakage: float = 0.5
     classifier: float = 1.0
     outside_mask: float = 1.0
+    clip: float = 0.0
+    smooth: float = 0.0
 
     def __post_init__(self) -> None:
         for name, value in self.__dict__.items():

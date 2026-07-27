@@ -26,6 +26,20 @@ class TestPromptBuilder(unittest.TestCase):
         prompt = build_concept_prompt(intervention)
 
         self.assertIn("remove smile", prompt.positive)
+        self.assertIn("closed relaxed lips", prompt.positive)
+        self.assertIn("no smile", prompt.positive)
+
+    def test_build_prompt_describes_blond_hair_visually(self):
+        intervention = ConceptIntervention(
+            target_concept="Blond_Hair",
+            desired_value=1,
+        )
+
+        prompt = build_concept_prompt(intervention)
+
+        self.assertIn("add blond hair", prompt.positive)
+        self.assertIn("natural warm blond hair", prompt.positive)
+        self.assertNotIn("Blond_Hair", prompt.positive)
 
 
 if __name__ == "__main__":

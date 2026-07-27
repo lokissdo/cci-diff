@@ -17,7 +17,14 @@ ml = [
   "open-clip-torch",
   "pillow",
   "numpy",
-  "opencv-python",
+  "opencv-python>=4.10,<5",
+  "grad-cam>=1.5,<2",
+]
+identity-export = [
+  "facenet-pytorch==2.6.0",
+]
+plot = [
+  "matplotlib>=3.8",
 ]
 dev = [
   "pytest",

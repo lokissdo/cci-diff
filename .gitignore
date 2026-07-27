@@ -5,6 +5,7 @@ __pycache__/
 .ruff_cache/
 .venv/
 .venv-ml/
+.venv-facenet-export/
 venv/
 archive/
 *.egg-info/
@@ -16,3 +17,4 @@ models/
 *.pt
 *.ckpt
 *.safetensors
+paper

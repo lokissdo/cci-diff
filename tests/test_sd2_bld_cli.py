@@ -142,6 +142,42 @@ class TestSD2BLDCLI(unittest.TestCase):
         self.assertEqual(args.boundary_weight, 0.3)
         self.assertEqual(args.tv_weight, 0.05)
 
+    def test_parser_accepts_clip_guidance_options(self):
+        parser = build_arg_parser()
+
+        args = parser.parse_args(
+            [
+                "--cci_config",
+                "examples/remove_smile_intervention.json",
+                "--init_image",
+                "data/3.jpg",
+                "--mask",
+                "outputs/generated_masks/3_mouth_lips.png",
+                "--output_dir",
+                "outputs/remove_smile_clip",
+                "--cci_hook",
+                "latent_classifier",
+                "--classifier_path",
+                "models/resnet50_multilabel_model.pth",
+                "--clip_guidance_text",
+                "a realistic portrait with a neutral facial expression",
+                "--clip_model",
+                "ViT-B-32",
+                "--clip_pretrained",
+                "laion2b_s34b_b79k",
+                "--clip_input_size",
+                "224",
+            ]
+        )
+
+        self.assertEqual(
+            args.clip_guidance_text,
+            "a realistic portrait with a neutral facial expression",
+        )
+        self.assertEqual(args.clip_model, "ViT-B-32")
+        self.assertEqual(args.clip_pretrained, "laion2b_s34b_b79k")
+        self.assertEqual(args.clip_input_size, 224)
+
     def test_resolve_prompt_uses_override_when_present(self):
         prompt = resolve_prompt(
             config_path="examples/smile_intervention.json",

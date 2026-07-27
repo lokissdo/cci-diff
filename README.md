@@ -120,6 +120,139 @@ The script writes separate no-hook and classifier-guided output folders under
 classifier settings used during denoising. CLIP expression guidance is reserved
 for a later experiment so this result remains attributable to one classifier.
 
+## Discover A Counterfactual Influence Graph
+
+This workflow replaces fixed target-to-face-part assignments with measured,
+classifier-specific evidence. Grad-CAM++ only proposes regions; same-seed
+masked diffusion interventions verify their effects. The resulting edges
+describe this classifier and intervention pipeline, not biological causality.
+
+Screen candidate regions:
+
+```bash
+.venv-ml/bin/python scripts/screen_counterfactual_regions.py \
+  --template_graph examples/graphs/remove_smile_clean_cci.json \
+  --classifier_path models/resnet50_multilabel_model.pth \
+  --sample_ids 0 1 2 3 4 5 6 7 8 9 \
+  --candidate_regions skin mouth upper_lip lower_lip \
+  --max_selected_regions 4 \
+  --saliency_coverage_threshold 0.80 \
+  --cohort_frequency_threshold 0.90 \
+  --minimum_captured_saliency 0.02 \
+  --output_dir outputs/smile_region_screening \
+  --device mps
+```
+
+Screening preserves the supplied semantic masks. It ranks eligible regions by
+median in-mask Grad-CAM++ intensity, median captured saliency, availability,
+and then smaller area. A broad region such as `skin` therefore does not outrank
+a concentrated mouth region merely because it contains more total heatmap
+mass.
+
+Run paired interventions. Every region set uses the same source IDs, seeds,
+diffusion settings, classifier, and identity model. Post-generation attack is
+disabled so the measured effect belongs to diffusion:
+
+```bash
+.venv-ml/bin/python scripts/run_counterfactual_region_interventions.py \
+  --template_graph examples/graphs/remove_smile_clean_cci.json \
+  --sample_ids 0 1 2 3 4 5 6 7 8 9 \
+  --candidate_regions mouth upper_lip lower_lip \
+  --max_set_size 4 \
+  --stop_flip_rate 0.96 \
+  --seeds 42 \
+  --model_path checkpoints/sd2-1-base \
+  --classifier_path models/resnet50_multilabel_model.pth \
+  --identity_model_path models/facenet_vggface2.ts \
+  --output_dir outputs/smile_region_interventions \
+  --device mps
+```
+
+Before generation, the runner compares every requested hard union mask over
+the complete discovery cohort. Exactly equivalent sets are reduced to one
+canonical treatment. For example, when every mouth pixel is already contained
+by `skin`, `skin + mouth` is recorded as an alias of `skin` and is not generated
+again. Strict supersets that add any pixel are retained. The requested sets,
+canonical sets, signatures, and aliases are stored in
+`intervention_manifest.json`.
+
+Analyze the completed CSV and emit both the evidence graph and selected
+execution policy:
+
+```bash
+.venv-ml/bin/python scripts/discover_counterfactual_graph.py \
+  --results outputs/smile_region_interventions/intervention_results.csv \
+  --template_graph examples/graphs/remove_smile_clean_cci.json \
+  --required_flip_rate 0.95 \
+  --minimum_samples 10 \
+  --output_dir outputs/smile_counterfactual_graph
+```
+
+The selected region set first has to satisfy the requested generation
+classifier flip rate. Among passing sets, selection minimizes semantic mask
+area, outside-mask change, total changed area, non-target drift, identity loss,
+and region count in that order. Online constraint weights remain
+residual-driven; graph discovery does not predict a permanent loss-weight
+vector.
+
+The full 100-discovery/100-held-out smile workflow is resumable:
+
+```bash
+bash scripts/run_smile_graph_individual_100.sh
+```
+
+Its defaults include `MINIMUM_REGION_COVERAGE=0.90` and
+`MINIMUM_CAPTURED_SALIENCY=0.02`. Override either as an environment variable
+when running a documented ablation.
+
+## Run The Two-Stage Kaggle Experiment
+
+The two notebooks separate graph discovery from held-out generation:
+
+1. `notebooks/01_global_graph_discovery.ipynb` builds and freezes one global
+   graph per target using a discovery cohort. Grad-CAM++ proposes no more than
+   four regions, and same-seed interventions test region sets progressively.
+2. `notebooks/02_full_cci_fixed_vs_adaptive.ipynb` excludes the discovery IDs
+   and runs a matched three-arm comparison: raw BLD (`A0`), fixed-equal CCI
+   (`A2`), and adaptive-feedback CCI (`A3`).
+
+Both notebooks default to 300 images for smile removal and 300 images for
+blond-hair addition, seed 42, CUDA, and float16 diffusion. Configure the path
+cell for the imported SD2 checkpoint, CelebA classifier, identity model, and
+CelebAMask-HQ dataset before running all cells. Outputs are written beneath
+`/kaggle/working`; completed rows are reused when a run is resumed.
+
+The held-out policies are intentionally independent of graph discovery:
+smile removal uses `mouth + upper_lip + lower_lip`, while blond-hair addition
+uses `hair`. This isolates controller behavior from region-policy selection.
+
+## Run One-Pass Individual Region CCI
+
+After discovery, freeze the influence graph and use source Grad-CAM++ to select
+the smallest saliency-covering subset of globally verified regions for every
+held-out image:
+
+```bash
+.venv-ml/bin/python scripts/run_individual_region_cci.py \
+  --influence_graph outputs/smile_counterfactual_graph/influence_graph.json \
+  --template_graph examples/graphs/remove_smile_clean_cci.json \
+  --sample_ids 100 101 102 103 104 \
+  --coverage_threshold 0.80 \
+  --seed 42 \
+  --model_path checkpoints/sd2-1-base \
+  --classifier_path models/resnet50_multilabel_model.pth \
+  --identity_model_path models/facenet_vggface2.ts \
+  --output_dir outputs/smile_individual_region_cci \
+  --device mps
+```
+
+The selector sees only the source classifier decision, source Grad-CAM++ map,
+and source semantic masks. It generates once per image. Failed flips are
+retained as failures; the runner does not expand the mask, generate
+alternatives, rerank outputs, or apply post-generation attack. Pass
+`--discovery_manifest` to reject accidental overlap between discovery and
+held-out IDs.
+
 ## Dry-Run The Legacy SD2 Bridge
 
 ```bash

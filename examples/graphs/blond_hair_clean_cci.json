@@ -1,0 +1,36 @@
+{
+  "version": 1,
+  "intervention": {
+    "concept": "Blond_Hair",
+    "desired_value": 1,
+    "target_probability": 0.8
+  },
+  "region": {
+    "audit_role": "hair",
+    "components": ["hair"],
+    "feather_radius": 3.0
+  },
+  "nodes": [
+    {"id": "blond_hair", "role": "target", "evaluator": "celeba_attribute", "attribute": "Blond_Hair"},
+    {"id": "identity", "role": "constraint", "evaluator": "facenet_identity", "tolerance": 0.08},
+    {"id": "outside_locality", "role": "constraint", "evaluator": "outside_l1", "tolerance": 0.02},
+    {"id": "residual_tv", "role": "constraint", "evaluator": "masked_residual_tv", "tolerance": 0.015}
+  ],
+  "edges": [
+    {"source": "blond_hair", "target": "identity", "relation": "must_preserve"},
+    {"source": "blond_hair", "target": "outside_locality", "relation": "must_preserve"},
+    {"source": "blond_hair", "target": "residual_tv", "relation": "must_preserve"}
+  ],
+  "controller": {
+    "dual_rate": 0.2,
+    "penalty": 0.5,
+    "lambda_max": 4.0,
+    "step_scale": 0.2,
+    "trust_radius": 0.15,
+    "norm_ema_beta": 0.9,
+    "gradient_floor": 0.00001,
+    "active_progress": [0.15, 0.90],
+    "every_n_steps": 2,
+    "final_corrections": 12
+  }
+}

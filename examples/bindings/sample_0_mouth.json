@@ -1,0 +1,8 @@
+{
+  "source_image": "data/CelebAMask-HQ/CelebA-HQ-img/0.jpg",
+  "masks": {
+    "mouth": "data/CelebAMask-HQ/CelebAMask-HQ-mask-anno/0/00000_mouth.png",
+    "upper_lip": "data/CelebAMask-HQ/CelebAMask-HQ-mask-anno/0/00000_u_lip.png",
+    "lower_lip": "data/CelebAMask-HQ/CelebAMask-HQ-mask-anno/0/00000_l_lip.png"
+  }
+}

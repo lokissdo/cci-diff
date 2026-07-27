@@ -19,6 +19,18 @@ def build_concept_prompt(intervention: ConceptIntervention) -> ConceptPrompt:
     """Build a Stable-Diffusion-friendly prompt pair from an intervention spec."""
 
     action = "add" if intervention.desired_value == 1 else "remove"
+    target = intervention.target_concept.replace("_", " ").strip().lower()
+    visual_descriptions = {
+        ("smile", 0): "relaxed neutral facial expression, closed relaxed lips, no smile",
+        ("smiling", 0): "relaxed neutral facial expression, closed relaxed lips, no smile",
+        ("smile", 1): "natural genuine smile",
+        ("smiling", 1): "natural genuine smile",
+        ("blond hair", 1): "natural warm blond hair with realistic detailed strands",
+    }
+    target_instruction = f"{action} {target}"
+    description = visual_descriptions.get((target, intervention.desired_value))
+    if description:
+        target_instruction = f"{target_instruction}: {description}"
     preserved = ", ".join(
         f"preserve {concept}" for concept in intervention.preserved_concepts
     )
@@ -29,7 +41,7 @@ def build_concept_prompt(intervention: ConceptIntervention) -> ConceptPrompt:
     positive_parts = [
         "(photo-realistic:1.2)",
         "ultra-high-resolution portrait of the same person",
-        f"{action} {intervention.target_concept}",
+        target_instruction,
     ]
     if preserved:
         positive_parts.append(preserved)

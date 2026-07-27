@@ -67,6 +67,19 @@ class FakeScheduler:
 
 
 class TestSD2BLDBackendContract(unittest.TestCase):
+    def test_seeded_noise_like_replays_the_same_random_stream(self):
+        import torch
+
+        from cci_diff.sd2_bld_backend import seeded_noise_like
+
+        reference = torch.zeros((1, 4, 2, 2))
+        first_generator = torch.Generator().manual_seed(42)
+        second_generator = torch.Generator().manual_seed(42)
+
+        first = seeded_noise_like(reference, first_generator)
+        second = seeded_noise_like(reference, second_generator)
+
+        self.assertTrue(torch.equal(first, second))
     def test_require_sd2_dependencies_raises_helpful_error_when_missing(self):
         from cci_diff.sd2_bld_backend import require_sd2_dependencies
 
@@ -336,6 +349,78 @@ class TestSD2BLDBackendContract(unittest.TestCase):
             )
 
         self.assertAlmostEqual(mask[0, 0, 0, 1].item(), 128 / 255)
+
+    def test_denoising_progress_covers_selected_reverse_interval(self):
+        from cci_diff.sd2_bld_backend import denoising_progress
+
+        self.assertEqual(denoising_progress(0, 1), 0.0)
+        self.assertEqual(denoising_progress(0, 5), 0.0)
+        self.assertEqual(denoising_progress(2, 5), 0.5)
+        self.assertEqual(denoising_progress(4, 5), 1.0)
+        with self.assertRaisesRegex(ValueError, "total_steps"):
+            denoising_progress(0, 0)
+        with self.assertRaisesRegex(ValueError, "selected reverse interval"):
+            denoising_progress(5, 5)
+
+    def test_old_step_constructor_gets_safe_context_defaults(self):
+        from cci_diff.sd2_bld_backend import SD2DenoisingStep
+
+        step = SD2DenoisingStep(
+            step_index=0,
+            timestep=17,
+            prompt="legacy",
+            latents=object(),
+            noise_pred=object(),
+            source_latents=object(),
+            latent_mask=object(),
+        )
+
+        self.assertIsNone(step.semantic_mask)
+        self.assertEqual(step.total_steps, 1)
+        self.assertEqual(step.progress, 0.0)
+
+    def test_step_state_records_new_semantic_context(self):
+        from cci_diff.sd2_bld_backend import (
+            SD2DenoisingStep,
+            diffusion_state_from_step,
+        )
+
+        step = SD2DenoisingStep(
+            step_index=1,
+            timestep=17,
+            prompt="context",
+            latents=FakeTensor((1, 4, 8, 8)),
+            noise_pred=FakeTensor((1, 4, 8, 8)),
+            source_latents=FakeTensor((1, 4, 8, 8)),
+            latent_mask=FakeTensor((1, 1, 8, 8)),
+            semantic_mask=FakeTensor((1, 1, 8, 8)),
+            total_steps=3,
+            progress=0.5,
+        )
+        extra = diffusion_state_from_step(step, phase="cci_guidance").extra
+
+        self.assertEqual(extra["semantic_mask_shape"], (1, 1, 8, 8))
+        self.assertEqual(extra["total_steps"], 3)
+        self.assertEqual(extra["progress"], 0.5)
+
+    def test_hook_and_blend_order_remains_pre_scheduler_then_post_scheduler(self):
+        import inspect
+
+        from cci_diff.sd2_bld_backend import BlendedLatentDiffusionSD2Backend
+
+        source = inspect.getsource(BlendedLatentDiffusionSD2Backend.edit_image)
+        self.assertLess(
+            source.index("apply_cci_guidance("),
+            source.index("self.scheduler.step("),
+        )
+        self.assertLess(
+            source.index("self.scheduler.step("),
+            source.index("apply_cci_latent_guidance_hook("),
+        )
+        self.assertLess(
+            source.index("apply_cci_latent_guidance_hook("),
+            source.index("blend_soft_latents("),
+        )
 
 
 if __name__ == "__main__":
