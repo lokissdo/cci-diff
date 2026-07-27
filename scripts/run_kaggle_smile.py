@@ -23,6 +23,9 @@ DEFAULT_CELEBA_ROOT = Path(
 )
 CLASSIFIER_PATH = DEFAULT_CCI_ASSET_ROOT / "resnet50_multilabel_model.pth"
 IDENTITY_MODEL_PATH = DEFAULT_CCI_ASSET_ROOT / "facenet_vggface2.ts"
+LEGACY_CCI_ASSET_ROOT = Path("/kaggle/input/cci-assets")
+LEGACY_CLASSIFIER_PATH = LEGACY_CCI_ASSET_ROOT / "resnet50_multilabel_model.pth"
+LEGACY_IDENTITY_MODEL_PATH = LEGACY_CCI_ASSET_ROOT / "facenet_vggface2.ts"
 IMAGE_ROOT = DEFAULT_CELEBA_ROOT / "CelebA-HQ-img"
 MASK_ROOT = DEFAULT_CELEBA_ROOT / "CelebAMask-HQ-mask-anno"
 PACKAGE_MODULES = {
@@ -107,8 +110,14 @@ def configure_runtime() -> None:
 
 def kaggle_assets() -> dict[str, Path]:
     assets = {
-        "classifier": CLASSIFIER_PATH,
-        "identity": IDENTITY_MODEL_PATH,
+        "classifier": (
+            CLASSIFIER_PATH if CLASSIFIER_PATH.exists() else LEGACY_CLASSIFIER_PATH
+        ),
+        "identity": (
+            IDENTITY_MODEL_PATH
+            if IDENTITY_MODEL_PATH.exists()
+            else LEGACY_IDENTITY_MODEL_PATH
+        ),
         "images": IMAGE_ROOT,
         "masks": MASK_ROOT,
     }

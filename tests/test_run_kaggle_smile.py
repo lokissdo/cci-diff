@@ -99,6 +99,26 @@ def test_kaggle_assets_uses_and_validates_hardcoded_paths(tmp_path):
     }
 
 
+def test_kaggle_assets_accepts_legacy_unversioned_private_dataset_mount(tmp_path):
+    module = load_script()
+    module.CLASSIFIER_PATH = tmp_path / "missing-classifier.pth"
+    module.IDENTITY_MODEL_PATH = tmp_path / "missing-identity.ts"
+    module.LEGACY_CLASSIFIER_PATH = tmp_path / "cci-assets" / "classifier.pth"
+    module.LEGACY_IDENTITY_MODEL_PATH = tmp_path / "cci-assets" / "identity.ts"
+    module.IMAGE_ROOT = tmp_path / "images"
+    module.MASK_ROOT = tmp_path / "masks"
+    module.LEGACY_CLASSIFIER_PATH.parent.mkdir()
+    module.LEGACY_CLASSIFIER_PATH.write_bytes(b"classifier")
+    module.LEGACY_IDENTITY_MODEL_PATH.write_bytes(b"identity")
+    module.IMAGE_ROOT.mkdir()
+    module.MASK_ROOT.mkdir()
+
+    assets = module.kaggle_assets()
+
+    assert assets["classifier"] == module.LEGACY_CLASSIFIER_PATH
+    assert assets["identity"] == module.LEGACY_IDENTITY_MODEL_PATH
+
+
 def test_kaggle_assets_rejects_invalid_hardcoded_path(tmp_path):
     module = load_script()
     module.CLASSIFIER_PATH = tmp_path / "missing.pth"
