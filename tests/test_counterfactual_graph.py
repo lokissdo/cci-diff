@@ -8,7 +8,9 @@ from cci_diff.counterfactual_graph import (
     aggregate_region_sets,
     build_influence_graph,
     compute_interactions,
+    pareto_region_sets,
     select_region_set,
+    target_efficiency,
 )
 
 
@@ -214,46 +216,100 @@ def test_pair_interaction_is_joint_effect_minus_singleton_effects():
     assert interactions[0].synergy == pytest.approx(0.3)
 
 
-def test_selection_prefers_minimal_passing_set_before_higher_flip_rate():
-    small = evidence(
-        ("mouth",), flip_rate=0.95, mean_effect=0.5, mask_fraction=0.04
+def test_pareto_filter_removes_strictly_dominated_region_set():
+    efficient = evidence(
+        ("mouth",), flip_rate=0.8, mean_effect=0.5, mask_fraction=0.04
     )
-    large = evidence(
-        ("lower_lip", "mouth"),
-        flip_rate=1.0,
-        mean_effect=0.7,
-        mask_fraction=0.09,
+    dominated = evidence(
+        ("nose",), flip_rate=0.7, mean_effect=0.4, mask_fraction=0.06
     )
-    failing = evidence(
-        ("upper_lip",), flip_rate=0.90, mean_effect=0.8, mask_fraction=0.02
+    broad_tradeoff = evidence(
+        ("skin",), flip_rate=1.0, mean_effect=0.9, mask_fraction=0.30
+    )
+
+    frontier = pareto_region_sets(
+        {
+            efficient.regions: efficient,
+            dominated.regions: dominated,
+            broad_tradeoff.regions: broad_tradeoff,
+        }
+    )
+
+    assert tuple(item.regions for item in frontier) == (
+        ("mouth",),
+        ("skin",),
+    )
+
+
+def test_selection_uses_target_effect_per_area_independent_of_flip_threshold():
+    localized = evidence(
+        ("mouth",), flip_rate=0.6, mean_effect=0.4, mask_fraction=0.04
+    )
+    broad = evidence(
+        ("skin",), flip_rate=1.0, mean_effect=0.9, mask_fraction=0.30
+    )
+    candidates = {localized.regions: localized, broad.regions: broad}
+
+    low_threshold = select_region_set(candidates, required_flip_rate=0.01)
+    high_threshold = select_region_set(candidates, required_flip_rate=0.99)
+
+    assert target_efficiency(localized) == pytest.approx(10.0)
+    assert target_efficiency(broad) == pytest.approx(3.0)
+    assert low_threshold.regions == ("mouth",)
+    assert high_threshold.regions == ("mouth",)
+
+
+def test_selection_uses_deterministic_ties_after_target_efficiency():
+    higher_effect = evidence(
+        ("mouth",), flip_rate=0.7, mean_effect=0.4, mask_fraction=0.04
+    )
+    lower_effect = evidence(
+        ("upper_lip",), flip_rate=0.9, mean_effect=0.2, mask_fraction=0.02
     )
 
     selected = select_region_set(
         {
-            small.regions: small,
-            large.regions: large,
-            failing.regions: failing,
-        },
-        required_flip_rate=0.95,
+            lower_effect.regions: lower_effect,
+            higher_effect.regions: higher_effect,
+        }
     )
 
     assert selected.regions == ("mouth",)
 
 
-def test_selection_fallback_maximizes_effect_before_flip_rate():
+def test_selection_fallback_maximizes_nonpositive_effect_then_flip_and_area():
     weaker = evidence(
-        ("mouth",), flip_rate=0.90, mean_effect=0.6, mask_fraction=0.04
+        ("mouth",), flip_rate=0.8, mean_effect=-0.2, mask_fraction=0.03
     )
-    stronger = evidence(
-        ("lower_lip",), flip_rate=0.80, mean_effect=0.7, mask_fraction=0.05
+    stronger_large = evidence(
+        ("skin",), flip_rate=0.6, mean_effect=-0.1, mask_fraction=0.20
+    )
+    stronger_small = evidence(
+        ("upper_lip",), flip_rate=0.7, mean_effect=-0.1, mask_fraction=0.02
     )
 
     selected = select_region_set(
-        {weaker.regions: weaker, stronger.regions: stronger},
-        required_flip_rate=0.95,
+        {
+            weaker.regions: weaker,
+            stronger_large.regions: stronger_large,
+            stronger_small.regions: stronger_small,
+        }
     )
 
-    assert selected.regions == ("lower_lip",)
+    assert selected.regions == ("upper_lip",)
+
+
+@pytest.mark.parametrize("mask_fraction", (None, 0.0, -0.1, math.nan))
+def test_selection_requires_positive_finite_mask_area(mask_fraction):
+    invalid = evidence(
+        ("mouth",),
+        flip_rate=0.8,
+        mean_effect=0.4,
+        mask_fraction=mask_fraction,
+    )
+
+    with pytest.raises(ValueError, match="mask fraction"):
+        select_region_set({invalid.regions: invalid})
 
 
 def test_graph_serialization_only_verifies_supported_positive_singletons():
@@ -287,7 +343,24 @@ def test_graph_serialization_only_verifies_supported_positive_singletons():
 
     assert payload["type"] == "classifier_counterfactual_influence"
     assert payload["selected_regions"] == ["mouth"]
-    assert payload["selection_status"] == "meets_requirement"
+    assert payload["selection_status"] == "pareto_efficient"
+    assert payload["provenance"]["selection_rule"] == (
+        "pareto_target_efficiency_v1"
+    )
+    assert payload["provenance"]["required_flip_rate_role"] == (
+        "legacy_compatibility_only"
+    )
+    evidence_rows = {
+        tuple(item["regions"]): item
+        for item in payload["region_set_evidence"]
+    }
+    assert evidence_rows[("mouth",)]["pareto_optimal"] is True
+    assert evidence_rows[("mouth",)]["target_efficiency"] == pytest.approx(
+        12.5
+    )
+    assert evidence_rows[("mouth",)]["dominated_by"] == []
+    assert evidence_rows[("upper_lip",)]["pareto_optimal"] is False
+    assert evidence_rows[("upper_lip",)]["dominated_by"] == [["mouth"]]
     assert payload["verified_edges"] == [
         {
             "source": "Smiling",
@@ -296,3 +369,22 @@ def test_graph_serialization_only_verifies_supported_positive_singletons():
         }
     ]
     assert payload["provenance"]["classifier"] == "resnet50_multilabel_model.pth"
+
+
+def test_graph_marks_nonpositive_selection_as_fallback():
+    negative = evidence(
+        ("mouth",),
+        flip_rate=0.0,
+        mean_effect=-0.1,
+        mask_fraction=0.04,
+        ci_low=-0.2,
+    )
+
+    result = build_influence_graph(
+        target="Smiling",
+        desired_value=0,
+        evidence_by_regions={negative.regions: negative},
+    )
+
+    assert result.selected_regions == ("mouth",)
+    assert result.selection_status == "fallback_nonpositive_effect"

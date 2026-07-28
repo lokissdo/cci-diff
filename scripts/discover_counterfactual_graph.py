@@ -183,7 +183,9 @@ def _render_report(result: InfluenceGraphResult) -> str:
         f"- Target: `{result.target}` -> `{result.desired_value}`",
         f"- Selection: `{selected}`",
         f"- Status: `{result.selection_status}`",
-        f"- Required flip rate: `{result.required_flip_rate:.3f}`",
+        "- Selection rule: `Pareto target-efficiency selection`",
+        "- Legacy required flip rate "
+        f"(not used for selection): `{result.required_flip_rate:.3f}`",
         f"- Verified singleton edges: `{len(result.verified_edges)}`",
         "",
         "The edges describe classifier-specific effects under the measured "
@@ -191,8 +193,9 @@ def _render_report(result: InfluenceGraphResult) -> str:
         "",
         "## Region Sets",
         "",
-        "| Regions | FR | Mean effect | 95% CI | Mask fraction |",
-        "|---|---:|---:|---:|---:|",
+        "| Regions | Pareto | Efficiency | FR | Mean effect | 95% CI | "
+        "Mask fraction | Dominated by |",
+        "|---|---:|---:|---:|---:|---:|---:|---|",
     ]
     for item in result.evidence:
         mask = (
@@ -200,11 +203,20 @@ def _render_report(result: InfluenceGraphResult) -> str:
             if item.mean_mask_fraction is None
             else f"{item.mean_mask_fraction:.4f}"
         )
+        efficiency = (
+            "-"
+            if item.target_efficiency is None
+            else f"{item.target_efficiency:.4f}"
+        )
+        dominated_by = ", ".join(
+            "+".join(regions) for regions in item.dominated_by
+        ) or "-"
         lines.append(
-            f"| {', '.join(item.regions)} | {item.flip_rate:.3f} | "
+            f"| {', '.join(item.regions)} | {item.pareto_optimal} | "
+            f"{efficiency} | {item.flip_rate:.3f} | "
             f"{item.mean_effect:.4f} | "
             f"[{item.effect_ci_low:.4f}, {item.effect_ci_high:.4f}] | "
-            f"{mask} |"
+            f"{mask} | {dominated_by} |"
         )
     return "\n".join(lines) + "\n"
 

@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import math
-from dataclasses import asdict, dataclass, field
+from dataclasses import asdict, dataclass, field, replace
 from typing import Any, Iterable, Mapping
 
 import numpy as np
@@ -93,10 +93,16 @@ class RegionSetEvidence:
     mean_non_target_drift: float | None = None
     mean_outside_l1: float | None = None
     mean_changed_fraction: float | None = None
+    pareto_optimal: bool | None = None
+    target_efficiency: float | None = None
+    dominated_by: tuple[RegionTuple, ...] = ()
 
     def to_dict(self) -> dict[str, Any]:
         payload = asdict(self)
         payload["regions"] = list(self.regions)
+        payload["dominated_by"] = [
+            list(regions) for regions in self.dominated_by
+        ]
         return payload
 
 
@@ -268,22 +274,82 @@ def compute_interactions(
     return tuple(interactions)
 
 
+def target_efficiency(item: RegionSetEvidence) -> float:
+    """Return desired-class probability movement per semantic-mask area."""
+
+    _validate_selection_evidence(item)
+    return float(item.mean_effect) / max(float(item.mean_mask_fraction), 1e-12)
+
+
+def pareto_region_sets(
+    evidence_by_regions: Mapping[RegionTuple, RegionSetEvidence],
+) -> tuple[RegionSetEvidence, ...]:
+    """Return sets not dominated on target effect, flip rate, and mask area."""
+
+    if not evidence_by_regions:
+        raise ValueError("At least one region-set evidence item is required")
+    candidates = tuple(evidence_by_regions.values())
+    for item in candidates:
+        _validate_selection_evidence(item)
+    frontier = [
+        candidate
+        for candidate in candidates
+        if not any(
+            _dominates(other, candidate)
+            for other in candidates
+            if other.regions != candidate.regions
+        )
+    ]
+    return tuple(sorted(frontier, key=lambda item: item.regions))
+
+
+def annotate_region_sets(
+    evidence_by_regions: Mapping[RegionTuple, RegionSetEvidence],
+) -> tuple[RegionSetEvidence, ...]:
+    """Attach deterministic Pareto and efficiency evidence to every set."""
+
+    frontier_regions = {
+        item.regions for item in pareto_region_sets(evidence_by_regions)
+    }
+    candidates = tuple(evidence_by_regions.values())
+    return tuple(
+        replace(
+            item,
+            pareto_optimal=item.regions in frontier_regions,
+            target_efficiency=target_efficiency(item),
+            dominated_by=tuple(
+                sorted(
+                    other.regions
+                    for other in candidates
+                    if other.regions != item.regions
+                    and _dominates(other, item)
+                )
+            ),
+        )
+        for item in sorted(candidates, key=lambda value: value.regions)
+    )
+
+
 def select_region_set(
     evidence_by_regions: Mapping[RegionTuple, RegionSetEvidence],
     *,
     required_flip_rate: float = 0.95,
 ) -> RegionSetEvidence:
-    """Choose target-feasible regions first, then minimize intervention cost."""
+    """Choose an area-efficient set from the target/flip/area Pareto frontier."""
 
-    if not evidence_by_regions:
-        raise ValueError("At least one region-set evidence item is required")
     _validate_probability("required_flip_rate", required_flip_rate)
-    candidates = tuple(evidence_by_regions.values())
-    passing = tuple(
-        item for item in candidates if item.flip_rate >= required_flip_rate
-    )
-    if passing:
-        return min(passing, key=_intervention_cost_key)
+    candidates = pareto_region_sets(evidence_by_regions)
+    positive = tuple(item for item in candidates if item.mean_effect > 0.0)
+    if positive:
+        return min(
+            positive,
+            key=lambda item: (
+                -target_efficiency(item),
+                -item.mean_effect,
+                -item.flip_rate,
+                *_intervention_cost_key(item),
+            ),
+        )
     return min(
         candidates,
         key=lambda item: (
@@ -314,6 +380,7 @@ def build_influence_graph(
     selected = select_region_set(
         evidence_by_regions, required_flip_rate=required_flip_rate
     )
+    annotated_evidence = annotate_region_sets(evidence_by_regions)
     verified_edges = tuple(
         (
             target,
@@ -328,24 +395,28 @@ def build_influence_graph(
         and item.mean_effect > 0.0
         and item.effect_ci_low > 0.0
     )
-    evidence = tuple(
-        sorted(evidence_by_regions.values(), key=lambda value: value.regions)
+    result_provenance = dict(provenance or {})
+    result_provenance.update(
+        {
+            "selection_rule": "pareto_target_efficiency_v1",
+            "required_flip_rate_role": "legacy_compatibility_only",
+        }
     )
     return InfluenceGraphResult(
         target=target,
         desired_value=desired_value,
         selected_regions=selected.regions,
         selection_status=(
-            "meets_requirement"
-            if selected.flip_rate >= required_flip_rate
-            else "fallback"
+            "pareto_efficient"
+            if selected.mean_effect > 0.0
+            else "fallback_nonpositive_effect"
         ),
         required_flip_rate=required_flip_rate,
         minimum_samples=minimum_samples,
         verified_edges=verified_edges,
-        evidence=evidence,
+        evidence=annotated_evidence,
         interactions=compute_interactions(evidence_by_regions),
-        provenance=dict(provenance or {}),
+        provenance=result_provenance,
     )
 
 
@@ -402,6 +473,36 @@ def _optional_cost(value: float | None) -> float:
 
 def _identity_cost(value: float | None) -> float:
     return -float(value) if value is not None else math.inf
+
+
+def _validate_selection_evidence(item: RegionSetEvidence) -> None:
+    for name, value in (
+        ("mean effect", item.mean_effect),
+        ("flip rate", item.flip_rate),
+    ):
+        if not math.isfinite(value):
+            raise ValueError(f"{name} must be finite for region selection")
+    area = item.mean_mask_fraction
+    if area is None or not math.isfinite(area) or area <= 0.0:
+        raise ValueError(
+            "mean mask fraction must be positive and finite for region selection"
+        )
+
+
+def _dominates(left: RegionSetEvidence, right: RegionSetEvidence) -> bool:
+    left_area = float(left.mean_mask_fraction)
+    right_area = float(right.mean_mask_fraction)
+    no_worse = (
+        left.mean_effect >= right.mean_effect
+        and left.flip_rate >= right.flip_rate
+        and left_area <= right_area
+    )
+    strictly_better = (
+        left.mean_effect > right.mean_effect
+        or left.flip_rate > right.flip_rate
+        or left_area < right_area
+    )
+    return no_worse and strictly_better
 
 
 def _intervention_cost_key(item: RegionSetEvidence) -> tuple[Any, ...]:

@@ -65,9 +65,17 @@ def test_read_and_discover_graph_writes_evidence_artifacts(tmp_path):
     assert "mouth" in {
         edge["target"] for edge in payload["verified_edges"]
     }
-    assert (tmp_path / "analysis" / "region_set_metrics.csv").is_file()
+    metrics_path = tmp_path / "analysis" / "region_set_metrics.csv"
+    with metrics_path.open(newline="", encoding="utf-8") as handle:
+        metrics = list(csv.DictReader(handle))
+    assert {"pareto_optimal", "target_efficiency", "dominated_by"} <= set(
+        metrics[0]
+    )
+    assert any(row["pareto_optimal"] == "True" for row in metrics)
     assert (tmp_path / "analysis" / "interactions.csv").is_file()
-    assert (tmp_path / "analysis" / "discovery_report.md").is_file()
+    report = (tmp_path / "analysis" / "discovery_report.md").read_text()
+    assert "Pareto target-efficiency selection" in report
+    assert "Legacy required flip rate" in report
 
 
 def test_screening_summary_reports_robust_heatmap_statistics():
