@@ -46,6 +46,24 @@ class ConceptEdge:
 
 
 @dataclass(frozen=True)
+class TrustRegionSpec:
+    initial_radius: float = 0.15
+    minimum_radius: float = 0.01
+    maximum_radius: float = 0.30
+    target_progress_fraction: float = 0.5
+    feasibility_tolerance: float = 0.0001
+    reliability_alpha_min: float = 0.10
+    huber_delta: float = 0.02
+    support_floor: float = 0.05
+    maximum_blend_compensation: float = 4.0
+    final_cumulative_radius: float = 0.60
+    final_iterations: int = 12
+
+
+DEFAULT_TRUST_REGION_SPEC = TrustRegionSpec()
+
+
+@dataclass(frozen=True)
 class ControllerSpec:
     dual_rate: float
     penalty: float
@@ -57,6 +75,8 @@ class ControllerSpec:
     active_progress: tuple[float, float]
     every_n_steps: int
     final_corrections: int = 0
+    trust_region: TrustRegionSpec = DEFAULT_TRUST_REGION_SPEC
+    trust_region_explicit: bool = False
 
 
 @dataclass(frozen=True)
@@ -107,6 +127,19 @@ class ConceptGraph:
                     if self.controller.final_corrections
                     else {}
                 ),
+                **(
+                    {
+                        "trust_region": _trust_region_to_dict(
+                            self.controller.trust_region
+                        )
+                    }
+                    if (
+                        self.controller.trust_region_explicit
+                        or self.controller.trust_region
+                        != DEFAULT_TRUST_REGION_SPEC
+                    )
+                    else {}
+                ),
             },
         }
 
@@ -133,6 +166,7 @@ def concept_graph_from_dict(payload: Mapping[str, Any]) -> ConceptGraph:
         feather_radius=float(region_payload["feather_radius"]),
     )
     controller_payload = payload["controller"]
+    trust_region_payload = controller_payload.get("trust_region", {})
     controller = ControllerSpec(
         dual_rate=float(controller_payload["dual_rate"]),
         penalty=float(controller_payload["penalty"]),
@@ -146,6 +180,75 @@ def concept_graph_from_dict(payload: Mapping[str, Any]) -> ConceptGraph:
         ),
         every_n_steps=int(controller_payload["every_n_steps"]),
         final_corrections=int(controller_payload.get("final_corrections", 0)),
+        trust_region=TrustRegionSpec(
+            initial_radius=float(
+                trust_region_payload.get(
+                    "initial_radius",
+                    DEFAULT_TRUST_REGION_SPEC.initial_radius,
+                )
+            ),
+            minimum_radius=float(
+                trust_region_payload.get(
+                    "minimum_radius",
+                    DEFAULT_TRUST_REGION_SPEC.minimum_radius,
+                )
+            ),
+            maximum_radius=float(
+                trust_region_payload.get(
+                    "maximum_radius",
+                    DEFAULT_TRUST_REGION_SPEC.maximum_radius,
+                )
+            ),
+            target_progress_fraction=float(
+                trust_region_payload.get(
+                    "target_progress_fraction",
+                    DEFAULT_TRUST_REGION_SPEC.target_progress_fraction,
+                )
+            ),
+            feasibility_tolerance=float(
+                trust_region_payload.get(
+                    "feasibility_tolerance",
+                    DEFAULT_TRUST_REGION_SPEC.feasibility_tolerance,
+                )
+            ),
+            reliability_alpha_min=float(
+                trust_region_payload.get(
+                    "reliability_alpha_min",
+                    DEFAULT_TRUST_REGION_SPEC.reliability_alpha_min,
+                )
+            ),
+            huber_delta=float(
+                trust_region_payload.get(
+                    "huber_delta",
+                    DEFAULT_TRUST_REGION_SPEC.huber_delta,
+                )
+            ),
+            support_floor=float(
+                trust_region_payload.get(
+                    "support_floor",
+                    DEFAULT_TRUST_REGION_SPEC.support_floor,
+                )
+            ),
+            maximum_blend_compensation=float(
+                trust_region_payload.get(
+                    "maximum_blend_compensation",
+                    DEFAULT_TRUST_REGION_SPEC.maximum_blend_compensation,
+                )
+            ),
+            final_cumulative_radius=float(
+                trust_region_payload.get(
+                    "final_cumulative_radius",
+                    DEFAULT_TRUST_REGION_SPEC.final_cumulative_radius,
+                )
+            ),
+            final_iterations=int(
+                trust_region_payload.get(
+                    "final_iterations",
+                    DEFAULT_TRUST_REGION_SPEC.final_iterations,
+                )
+            ),
+        ),
+        trust_region_explicit="trust_region" in controller_payload,
     )
     nodes = tuple(
         ConceptNode(
@@ -308,6 +411,22 @@ def _node_to_dict(node: ConceptNode) -> dict[str, Any]:
     return payload
 
 
+def _trust_region_to_dict(spec: TrustRegionSpec) -> dict[str, Any]:
+    return {
+        "initial_radius": spec.initial_radius,
+        "minimum_radius": spec.minimum_radius,
+        "maximum_radius": spec.maximum_radius,
+        "target_progress_fraction": spec.target_progress_fraction,
+        "feasibility_tolerance": spec.feasibility_tolerance,
+        "reliability_alpha_min": spec.reliability_alpha_min,
+        "huber_delta": spec.huber_delta,
+        "support_floor": spec.support_floor,
+        "maximum_blend_compensation": spec.maximum_blend_compensation,
+        "final_cumulative_radius": spec.final_cumulative_radius,
+        "final_iterations": spec.final_iterations,
+    }
+
+
 def _validate_acyclic(adjacency: Mapping[str, list[str]]) -> None:
     visiting: set[str] = set()
     visited: set[str] = set()
@@ -362,3 +481,51 @@ def _validate_controller(spec: ControllerSpec) -> None:
         raise ValueError("every_n_steps must be positive")
     if spec.final_corrections < 0:
         raise ValueError("final_corrections must be non-negative")
+    _validate_trust_region(spec.trust_region)
+
+
+def _validate_trust_region(spec: TrustRegionSpec) -> None:
+    numeric_values = (
+        spec.initial_radius,
+        spec.minimum_radius,
+        spec.maximum_radius,
+        spec.target_progress_fraction,
+        spec.feasibility_tolerance,
+        spec.reliability_alpha_min,
+        spec.huber_delta,
+        spec.support_floor,
+        spec.maximum_blend_compensation,
+        spec.final_cumulative_radius,
+    )
+    if not all(math.isfinite(value) for value in numeric_values):
+        raise ValueError("trust_region values must be finite")
+    if not (
+        0
+        < spec.minimum_radius
+        <= spec.initial_radius
+        <= spec.maximum_radius
+    ):
+        raise ValueError(
+            "trust_region radii must satisfy "
+            "0 < minimum_radius <= initial_radius <= maximum_radius"
+        )
+    if not 0 < spec.target_progress_fraction < 1:
+        raise ValueError(
+            "target_progress_fraction must be strictly between 0 and 1"
+        )
+    if spec.feasibility_tolerance <= 0:
+        raise ValueError("feasibility_tolerance must be positive")
+    if not 0 < spec.reliability_alpha_min < 1:
+        raise ValueError(
+            "reliability_alpha_min must be strictly between 0 and 1"
+        )
+    if spec.huber_delta <= 0:
+        raise ValueError("huber_delta must be positive")
+    if not 0 < spec.support_floor <= 1:
+        raise ValueError("support_floor must be in (0, 1]")
+    if spec.maximum_blend_compensation < 1:
+        raise ValueError("maximum_blend_compensation must be at least 1")
+    if spec.final_cumulative_radius <= 0:
+        raise ValueError("final_cumulative_radius must be positive")
+    if isinstance(spec.final_iterations, bool) or spec.final_iterations < 0:
+        raise ValueError("final_iterations must be non-negative")

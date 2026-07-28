@@ -53,6 +53,49 @@ def valid_graph_payload():
 
 
 class TestConceptGraph(unittest.TestCase):
+    def test_trust_region_defaults_preserve_version_one_round_trip(self):
+        from cci_diff.concept_graph import (
+            DEFAULT_TRUST_REGION_SPEC,
+            concept_graph_from_dict,
+        )
+
+        payload = valid_graph_payload()
+        graph = concept_graph_from_dict(payload)
+
+        self.assertEqual(graph.controller.trust_region, DEFAULT_TRUST_REGION_SPEC)
+        self.assertEqual(graph.to_dict(), payload)
+
+    def test_explicit_trust_region_settings_round_trip_and_validate(self):
+        from cci_diff.concept_graph import concept_graph_from_dict
+
+        payload = valid_graph_payload()
+        settings = {
+            "initial_radius": 0.15,
+            "minimum_radius": 0.01,
+            "maximum_radius": 0.30,
+            "target_progress_fraction": 0.5,
+            "feasibility_tolerance": 0.0001,
+            "reliability_alpha_min": 0.10,
+            "huber_delta": 0.02,
+            "support_floor": 0.05,
+            "maximum_blend_compensation": 4.0,
+            "final_cumulative_radius": 0.60,
+            "final_iterations": 12,
+        }
+        payload["controller"]["trust_region"] = settings
+
+        graph = concept_graph_from_dict(payload)
+
+        self.assertEqual(graph.controller.trust_region.initial_radius, 0.15)
+        self.assertEqual(
+            graph.to_dict()["controller"]["trust_region"],
+            settings,
+        )
+
+        payload["controller"]["trust_region"]["minimum_radius"] = 0.31
+        with self.assertRaisesRegex(ValueError, "minimum_radius"):
+            concept_graph_from_dict(payload)
+
     def test_parse_and_round_trip_version_one_graph(self):
         from cci_diff.concept_graph import concept_graph_from_dict
 
