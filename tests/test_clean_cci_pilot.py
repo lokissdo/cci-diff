@@ -179,6 +179,71 @@ class TestCleanCCIPilot(unittest.TestCase):
         self.assertFalse(args.continue_on_error)
         self.assertEqual(args.cci_post_attack, "none")
 
+    def test_parser_accepts_explicit_sample_ids(self):
+        from scripts.run_clean_cci_pilot import build_arg_parser
+
+        args = build_arg_parser().parse_args(
+            [
+                "--features",
+                "smile",
+                "--classifier_path",
+                "classifier.pth",
+                "--identity_model_path",
+                "identity.pt",
+                "--output_dir",
+                "outputs/test",
+                "--sample_ids",
+                "9",
+                "3",
+            ]
+        )
+
+        self.assertEqual(args.sample_ids, [9, 3])
+
+    def test_explicit_sample_ids_limit_selection_to_sorted_shard(self):
+        from scripts.run_clean_cci_pilot import select_eligible_samples
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            for sample_id in (3, 9):
+                Image.new("RGB", (4, 4), "black").save(
+                    root / f"{sample_id}.jpg"
+                )
+            mask = root / "mask.png"
+            Image.new("L", (4, 4), 255).save(mask)
+            args = SimpleNamespace(
+                sample_ids=[9, 3],
+                max_image_id=100,
+                limit=2,
+                image_root=str(root),
+                mask_root=str(root),
+                classifier_input_size=512,
+                device="cpu",
+                excluded_ids_by_feature={},
+            )
+            with mock.patch(
+                "scripts.run_clean_cci_pilot.annotation_paths",
+                return_value={"mouth": mask, "u_lip": mask, "l_lip": mask},
+            ), mock.patch(
+                "scripts.run_sd2_bld_cci.score_classifier_image_grid",
+                return_value=[0.9],
+            ), mock.patch(
+                "scripts.run_sd2_bld_cci.load_rgb_image_tensor",
+                return_value=object(),
+            ), mock.patch(
+                "cci_diff.identity.facenet.detect_largest_face_box",
+                return_value=(0, 0, 4, 4),
+            ):
+                selected, decisions = select_eligible_samples(
+                    args,
+                    feature="smile",
+                    classifier=object(),
+                    detector=object(),
+                )
+
+        self.assertEqual([sample[0] for sample in selected], [3, 9])
+        self.assertEqual([decision["image_id"] for decision in decisions], [3, 9])
+
     def test_clean_variant_forwards_adaptive_post_attack(self):
         from scripts.run_clean_cci_pilot import (
             build_arg_parser,

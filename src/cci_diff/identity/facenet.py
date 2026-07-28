@@ -134,6 +134,15 @@ def standardize_face(crop: Any) -> Any:
     return (crop * 255.0 - 127.5) / 128.0
 
 
+def model_input_dtype(model: Any, fallback: Any) -> Any:
+    """Return the model parameter dtype, or the input dtype for parameterless models."""
+
+    try:
+        return next(model.parameters()).dtype
+    except (AttributeError, StopIteration):
+        return fallback
+
+
 class FaceNetIdentityConstraint:
     def __init__(
         self,
@@ -165,8 +174,11 @@ class FaceNetIdentityConstraint:
             size=self.crop_size,
         )
         with torch.no_grad():
+            standardized = standardize_face(crop).to(
+                dtype=model_input_dtype(self.model, crop.dtype)
+            )
             self._source_embedding = torch.nn.functional.normalize(
-                self.model(standardize_face(crop)),
+                self.model(standardized),
                 dim=1,
             ).detach()
 
@@ -176,8 +188,11 @@ class FaceNetIdentityConstraint:
         if self.face_box is None or self._source_embedding is None:
             raise RuntimeError(f"Constraint {self.name!r} is not bound to a source")
         crop = fixed_face_crop(image, self.face_box, size=self.crop_size)
+        standardized = standardize_face(crop).to(
+            dtype=model_input_dtype(self.model, crop.dtype)
+        )
         embedding = torch.nn.functional.normalize(
-            self.model(standardize_face(crop)),
+            self.model(standardized),
             dim=1,
         )
         source = self._source_embedding.to(

@@ -59,6 +59,41 @@ class TestFaceNetIdentity(unittest.TestCase):
         changed[:, 0] = 1.0
         self.assertGreater(evaluator.measure(changed).item(), 0.0)
 
+    def test_identity_casts_half_images_to_float_model_and_keeps_gradients(self):
+        import torch
+
+        from cci_diff.constraints import ConstraintContext
+        from cci_diff.identity.facenet import FaceNetIdentityConstraint
+
+        class Float32Embedder(torch.nn.Module):
+            def __init__(self):
+                super().__init__()
+                self.projection = torch.nn.Conv2d(3, 3, kernel_size=1, bias=False)
+
+            def forward(self, images):
+                return self.projection(images).mean(dim=(2, 3))
+
+        source = torch.zeros((1, 3, 8, 8), dtype=torch.float16)
+        mask = torch.ones((1, 1, 8, 8), dtype=torch.float16)
+        evaluator = FaceNetIdentityConstraint(
+            "identity",
+            Float32Embedder().float().eval(),
+            FakeDetector(),
+            tolerance=0.08,
+            crop_size=4,
+        )
+        evaluator.bind(ConstraintContext(source, mask, mask))
+        changed = source.clone()
+        changed[:, 0] = 1.0
+        changed.requires_grad_(True)
+
+        loss = evaluator.measure(changed)
+        loss.backward()
+
+        self.assertEqual(loss.dtype, torch.float32)
+        self.assertIsNotNone(changed.grad)
+        self.assertTrue(torch.isfinite(changed.grad).all())
+
     def test_detector_selects_largest_face_and_expands_it(self):
         import numpy as np
         import torch
