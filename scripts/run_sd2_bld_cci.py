@@ -14,7 +14,9 @@ from typing import Any
 
 from cci_diff.adapters.sd2_clean_cci import (
     CleanCCIGuidanceHook,
+    FinalPreservationTrustRegionHook,
     FinalTargetLatentCorrectionHook,
+    TrustRegionCleanCCIGuidanceHook,
 )
 from cci_diff.adapters.sd2_cci import apply_cci_latent_guidance, infer_target_rgb
 from cci_diff.adapters.sd2_robust import (
@@ -45,6 +47,7 @@ from cci_diff.constraints import (
     CelebAAttributeConstraint,
     CelebAAttributeTarget,
     MaskedResidualTVConstraint,
+    NonTargetDriftEvaluator,
     OutsideL1Constraint,
 )
 from cci_diff.guidance import GuidanceTerms
@@ -69,6 +72,9 @@ from cci_diff.post_attack import (
 from cci_diff.prompts import build_concept_prompt
 from cci_diff.sd2_bld_backend import BlendedLatentDiffusionSD2Backend
 from cci_diff.spec import ConceptIntervention
+from cci_diff.trust_region_controller import (
+    LexicographicTrustRegionController,
+)
 
 
 @dataclass(frozen=True)
@@ -234,9 +240,18 @@ def build_arg_parser() -> argparse.ArgumentParser:
     parser.add_argument("--clip_input_size", type=int, default=224)
     parser.add_argument(
         "--cci_controller_mode",
-        choices=["disabled", "fixed_equal", "feedback"],
+        choices=[
+            "disabled",
+            "fixed_equal",
+            "feedback",
+            "fixed_trust_matched",
+            "trust_region",
+        ],
         default="feedback",
-        help="Ablation mode for predicted-clean CCI; feedback is the proposed method.",
+        help=(
+            "Predicted-clean controller mode; trust_region is the proposed "
+            "method and fixed_trust_matched is its matched comparator."
+        ),
     )
     parser.add_argument("--cci_disable_target_projection", action="store_true")
     parser.add_argument("--cci_disable_target_guidance", action="store_true")
@@ -292,6 +307,14 @@ def build_arg_parser() -> argparse.ArgumentParser:
         default=1.0,
     )
     return parser
+
+
+def uses_trust_region(controller_mode: str) -> bool:
+    return controller_mode in {"fixed_trust_matched", "trust_region"}
+
+
+def uses_archived_final_correction(controller_mode: str) -> bool:
+    return controller_mode in {"fixed_equal", "feedback"}
 
 
 def validate_mode_args(args: argparse.Namespace) -> None:
@@ -1637,26 +1660,72 @@ def run_clean(args: argparse.Namespace, output_dir: Path) -> str:
         if args.cci_frame_dir
         else None
     )
-    clean_hook = CleanCCIGuidanceHook(
-        scheduler=backend.scheduler,
-        vae=backend.vae,
-        target_evaluator=target,
-        constraint_evaluators=constraints,
-        controller=ConstraintFeedbackController(
-            plan.controller,
-            use_target_guidance=not args.cci_disable_target_guidance,
-            normalize_gradients=not args.cci_disable_gradient_normalization,
-            budget_constraints=not args.cci_disable_target_budget,
-        ),
-        desired_value=plan.graph.intervention.desired_value,
-        target_probability=plan.graph.intervention.target_probability,
-        trace_writer=JSONLTraceWriter(trace_path),
-        frame_observer=frame_observer,
-        controller_mode=args.cci_controller_mode,
-        project_conflicts=not args.cci_disable_target_projection,
-        scheduled_guidance=not args.cci_disable_guidance_schedule,
-    )
-    final_hook = (
+    trust_mode = uses_trust_region(args.cci_controller_mode)
+    archived_final_hook = None
+    trust_final_hook = None
+    if trust_mode:
+        drift_evaluator = NonTargetDriftEvaluator(
+            classifier,
+            target_index=plan.target.attribute_index,
+            input_size=args.classifier_input_size,
+            huber_delta=plan.controller.trust_region.huber_delta,
+        )
+        trust_controller = LexicographicTrustRegionController(
+            plan.controller.trust_region
+        )
+        clean_hook = TrustRegionCleanCCIGuidanceHook(
+            scheduler=backend.scheduler,
+            vae=backend.vae,
+            target_evaluator=target,
+            drift_evaluator=drift_evaluator,
+            constraint_evaluators=constraints,
+            controller=trust_controller,
+            desired_value=plan.graph.intervention.desired_value,
+            target_probability=plan.graph.intervention.target_probability,
+            trace_writer=JSONLTraceWriter(trace_path),
+            frame_observer=frame_observer,
+            controller_mode=args.cci_controller_mode,
+            every_n_steps=plan.controller.every_n_steps,
+        )
+        if (
+            plan.controller.trust_region.final_iterations
+            and not args.cci_disable_final_correction
+        ):
+            trust_final_hook = FinalPreservationTrustRegionHook(
+                vae=backend.vae,
+                target_evaluator=target,
+                drift_evaluator=drift_evaluator,
+                constraint_evaluators=constraints,
+                controller=trust_controller,
+                desired_value=plan.graph.intervention.desired_value,
+                target_probability=(
+                    plan.graph.intervention.target_probability
+                ),
+                controller_mode=args.cci_controller_mode,
+            )
+    else:
+        clean_hook = CleanCCIGuidanceHook(
+            scheduler=backend.scheduler,
+            vae=backend.vae,
+            target_evaluator=target,
+            constraint_evaluators=constraints,
+            controller=ConstraintFeedbackController(
+                plan.controller,
+                use_target_guidance=not args.cci_disable_target_guidance,
+                normalize_gradients=(
+                    not args.cci_disable_gradient_normalization
+                ),
+                budget_constraints=not args.cci_disable_target_budget,
+            ),
+            desired_value=plan.graph.intervention.desired_value,
+            target_probability=plan.graph.intervention.target_probability,
+            trace_writer=JSONLTraceWriter(trace_path),
+            frame_observer=frame_observer,
+            controller_mode=args.cci_controller_mode,
+            project_conflicts=not args.cci_disable_target_projection,
+            scheduled_guidance=not args.cci_disable_guidance_schedule,
+        )
+    archived_final_hook = (
         FinalTargetLatentCorrectionHook(
             vae=backend.vae,
             target_evaluator=target,
@@ -1666,12 +1735,13 @@ def run_clean(args: argparse.Namespace, output_dir: Path) -> str:
             step_radius=plan.controller.trust_radius,
             mask_mode=args.cci_final_correction_mask,
         )
-        if args.cci_controller_mode != "disabled"
+        if uses_archived_final_correction(args.cci_controller_mode)
         and plan.controller.final_corrections
         and not args.cci_disable_target_guidance
         and not args.cci_disable_final_correction
         else None
     )
+    final_hook = trust_final_hook or archived_final_hook
     setup = CleanRunSetup(
         plan=plan,
         mask_artifacts=mask_artifacts,
@@ -1752,13 +1822,31 @@ def run_clean(args: argparse.Namespace, output_dir: Path) -> str:
         "runtime_packages": _runtime_package_versions(),
         "trace_path": setup.trace_path,
         "controller_mode": args.cci_controller_mode,
+        "resolved_trust_region": (
+            asdict(plan.controller.trust_region) if trust_mode else None
+        ),
+        "non_target_drift_optimization": trust_mode,
         "target_projection": not args.cci_disable_target_projection,
         "target_guidance": not args.cci_disable_target_guidance,
         "gradient_normalization": not args.cci_disable_gradient_normalization,
         "target_budget": not args.cci_disable_target_budget,
         "guidance_schedule": not args.cci_disable_guidance_schedule,
         "final_correction_enabled": not args.cci_disable_final_correction,
-        "final_correction": final_hook.record if final_hook is not None else None,
+        "final_correction": (
+            archived_final_hook.record
+            if archived_final_hook is not None
+            else None
+        ),
+        "archived_final_correction": (
+            archived_final_hook.record
+            if archived_final_hook is not None
+            else None
+        ),
+        "trust_region_final_restoration": (
+            trust_final_hook.record
+            if trust_final_hook is not None
+            else None
+        ),
         "post_attack": post_attack,
         "wall_seconds": wall_seconds,
         "peak_mps_bytes": clean_hook.peak_mps_bytes,

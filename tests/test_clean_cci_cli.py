@@ -39,6 +39,28 @@ class TestCleanCCICLI(unittest.TestCase):
         self.assertIsNone(args.mask)
         self.assertEqual(args.generation_mask_dilation, 0)
 
+    def test_clean_mode_accepts_trust_region_modes(self):
+        for mode in ("fixed_trust_matched", "trust_region"):
+            with self.subTest(mode=mode):
+                args = self.parse("--cci_controller_mode", mode)
+                validate_mode_args(args)
+                self.assertEqual(args.cci_controller_mode, mode)
+
+    def test_trust_region_mode_disables_archived_target_only_final_hook(self):
+        from scripts.run_sd2_bld_cci import (
+            uses_archived_final_correction,
+            uses_trust_region,
+        )
+
+        self.assertTrue(uses_trust_region("trust_region"))
+        self.assertTrue(uses_trust_region("fixed_trust_matched"))
+        self.assertFalse(uses_trust_region("feedback"))
+        self.assertFalse(uses_archived_final_correction("trust_region"))
+        self.assertFalse(
+            uses_archived_final_correction("fixed_trust_matched")
+        )
+        self.assertTrue(uses_archived_final_correction("feedback"))
+
     def test_clean_mode_accepts_predicted_clean_frame_directory(self):
         args = self.parse("--cci_frame_dir", "outputs/frames")
 

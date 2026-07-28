@@ -12,6 +12,26 @@ from PIL import Image
 
 
 class TestCleanCCIPilot(unittest.TestCase):
+    def test_trust_region_variants_are_explicit_and_matched(self):
+        from scripts.run_clean_cci_pilot import (
+            CONTROLLER_VARIANTS,
+            VARIANTS,
+        )
+
+        self.assertEqual(
+            VARIANTS["A10"]["controller_mode"],
+            "fixed_trust_matched",
+        )
+        self.assertEqual(
+            VARIANTS["A11"]["controller_mode"],
+            "trust_region",
+        )
+        self.assertEqual(
+            CONTROLLER_VARIANTS["fixed_trust_matched"],
+            "A10",
+        )
+        self.assertEqual(CONTROLLER_VARIANTS["trust_region"], "A11")
+
     def test_controller_mode_flags_resolve_fixed_and_adaptive_variants(self):
         from scripts.run_clean_cci_pilot import (
             build_arg_parser,

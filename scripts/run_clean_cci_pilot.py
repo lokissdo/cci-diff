@@ -83,12 +83,24 @@ VARIANTS = {
         "projection": True,
         "flags": ("--cci_disable_final_correction",),
     },
+    "A10": {
+        "hook": "clean_constraint",
+        "controller_mode": "fixed_trust_matched",
+        "projection": True,
+    },
+    "A11": {
+        "hook": "clean_constraint",
+        "controller_mode": "trust_region",
+        "projection": True,
+    },
 }
 
 CONTROLLER_VARIANTS = {
     "disabled": "A0",
     "fixed_equal": "A2",
     "feedback": "A3",
+    "fixed_trust_matched": "A10",
+    "trust_region": "A11",
 }
 
 

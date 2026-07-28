@@ -310,7 +310,10 @@ class TrustRegionCleanCCIGuidanceHook:
         trace_writer: Any,
         frame_observer: Any | None = None,
         controller_mode: str = "trust_region",
+        every_n_steps: int = 1,
     ) -> None:
+        if every_n_steps <= 0:
+            raise ValueError("every_n_steps must be positive")
         self.scheduler = scheduler
         self.vae = vae
         self.target_evaluator = target_evaluator
@@ -322,6 +325,7 @@ class TrustRegionCleanCCIGuidanceHook:
         self.trace_writer = trace_writer
         self.frame_observer = frame_observer
         self.controller_mode = controller_mode
+        self.every_n_steps = every_n_steps
         self._evaluators_bound = False
         self._pending_record: dict[str, Any] | None = None
         self._retention_reference = None
@@ -333,6 +337,8 @@ class TrustRegionCleanCCIGuidanceHook:
 
         self.current_step_active = False
         self._pending_record = None
+        if step.step_index % self.every_n_steps != 0:
+            return None
         alpha = alpha_prod_for_step(self.scheduler, step.timestep, step.latents)
         alpha_number = float(alpha.detach().item())
         if alpha_number < self.controller.spec.reliability_alpha_min:
@@ -515,6 +521,60 @@ class TrustRegionCleanCCIGuidanceHook:
             self._pending_record = None
             self._retention_reference = None
             self.current_step_active = False
+
+    def evaluate_image(self, image: Any) -> dict[str, Any]:
+        """Audit final target, constraints, and non-target drift."""
+
+        import torch
+
+        if not self._evaluators_bound:
+            raise RuntimeError(
+                "Trust-region CCI evaluators are not bound to a source image"
+            )
+        with torch.no_grad():
+            logit = self.target_evaluator.logit(image)
+            margin = target_margin(
+                logit,
+                self.desired_value,
+                self.target_probability,
+            )
+            measured = [
+                (evaluator, evaluator.measure(image))
+                for evaluator in self.constraint_evaluators
+            ]
+            drift = self.drift_evaluator.audit(image)
+        target_passed = math.isfinite(margin.residual) and margin.residual <= 0
+        failed_names = []
+        constraint_payload = {}
+        for evaluator, value in measured:
+            number = float(value.item())
+            passed = math.isfinite(number) and number <= evaluator.tolerance
+            if not passed:
+                failed_names.append(evaluator.name)
+            constraint_payload[evaluator.name] = {
+                "value": number if math.isfinite(number) else None,
+                "tolerance": evaluator.tolerance,
+                "passed": passed,
+            }
+        signed_margin = float(
+            margin.signed_logit.item() - margin.required_logit
+        )
+        logit_number = float(logit.item())
+        return {
+            "target": {
+                "logit": logit_number if math.isfinite(logit_number) else None,
+                "desired_probability": margin.desired_probability,
+                "required_probability": self.target_probability,
+                "signed_margin": (
+                    signed_margin if math.isfinite(signed_margin) else None
+                ),
+                "passed": target_passed,
+            },
+            "constraints": constraint_payload,
+            "non_target_drift": drift,
+            "feasible": target_passed and not failed_names,
+            "failed_constraints": failed_names,
+        }
 
     def _bind_evaluators(self, step: Any, clean_image: Any) -> None:
         import torch
