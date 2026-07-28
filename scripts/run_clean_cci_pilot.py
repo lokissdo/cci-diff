@@ -773,9 +773,16 @@ def select_eligible_samples(
 
     config = FEATURES[feature]
     excluded = getattr(args, "excluded_ids_by_feature", {}).get(feature, set())
+    explicit_ids = getattr(args, "sample_ids", None)
+    image_ids = (
+        sorted(int(image_id) for image_id in explicit_ids)
+        if explicit_ids is not None
+        else range(args.max_image_id)
+    )
+    required_count = len(image_ids) if explicit_ids is not None else args.limit
     selected = []
     decisions = []
-    for image_id in range(args.max_image_id):
+    for image_id in image_ids:
         if image_id in excluded:
             continue
         source = Path(args.image_root) / f"{image_id}.jpg"
@@ -824,11 +831,12 @@ def select_eligible_samples(
         decisions.append(decision)
         if eligible:
             selected.append((image_id, source, masks))
-        if len(selected) == args.limit:
+        if len(selected) == required_count:
             break
-    if len(selected) < args.limit:
+    if len(selected) < required_count:
         raise ValueError(
-            f"Found only {len(selected)} eligible {feature} samples; required {args.limit}"
+            f"Found only {len(selected)} eligible {feature} samples; "
+            f"required {required_count}"
         )
     return selected, decisions
 
@@ -1200,6 +1208,13 @@ def build_arg_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument("--classifier_input_size", type=int, default=512)
     parser.add_argument("--max_image_id", type=int, default=30000)
+    parser.add_argument(
+        "--sample_ids",
+        nargs="+",
+        type=int,
+        default=None,
+        help="Evaluate exactly these preselected sample IDs.",
+    )
     parser.add_argument(
         "--variants",
         nargs="+",
