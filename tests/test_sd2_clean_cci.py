@@ -136,6 +136,28 @@ class TestSD2CleanPrediction(unittest.TestCase):
         self.assertTrue(torch.all((decoded >= 0.0) & (decoded <= 1.0)))
         self.assertIsNotNone(latents.grad)
 
+    def test_decode_clean_latents_casts_half_latents_to_vae_dtype(self):
+        import torch
+
+        from cci_diff.adapters.sd2_clean_cci import decode_clean_latents
+
+        class FakeVAE:
+            dtype = torch.float32
+
+            def __init__(self):
+                self.received_dtype = None
+
+            def decode(self, latents):
+                self.received_dtype = latents.dtype
+                return SimpleNamespace(sample=latents)
+
+        vae = FakeVAE()
+        latents = torch.tensor([[[[-0.1, 0.1]]]], dtype=torch.float16)
+
+        decode_clean_latents(vae, latents, latent_scale=1.0)
+
+        self.assertEqual(vae.received_dtype, torch.float32)
+
     def test_clean_hook_uses_float32_guidance_for_float16_denoising(self):
         import tempfile
         from pathlib import Path

@@ -61,7 +61,12 @@ def decode_clean_latents(
 ) -> Any:
     if latent_scale <= 0:
         raise ValueError("latent_scale must be positive")
-    decoded = vae.decode(clean_latents / latent_scale).sample
+    # The SD2 denoiser may run in FP16 while clean-CCI intentionally keeps
+    # the VAE in FP32 for stable differentiable decoding. Match the VAE input
+    # to its parameters before decoding so CUDA convolution receives one dtype.
+    vae_dtype = getattr(vae, "dtype", clean_latents.dtype)
+    vae_latents = clean_latents.to(dtype=vae_dtype)
+    decoded = vae.decode(vae_latents / latent_scale).sample
     return (decoded / 2.0 + 0.5).clamp(0.0, 1.0)
 
 
