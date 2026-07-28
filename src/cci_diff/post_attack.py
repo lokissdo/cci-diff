@@ -540,23 +540,59 @@ def gradcam_pp_saliency(
     label_index: int,
     original_present: bool,
 ):
-    """Return normalized Grad-CAM++ saliency for one multi-label output."""
+    """Return normalized Grad-CAM++ saliency without an optional dependency.
+
+    Kaggle's offline image does not consistently ship ``pytorch-grad-cam``.
+    This is the Grad-CAM++ weighting rule directly in PyTorch, which keeps
+    region discovery self-contained and differentiates the requested output
+    score with respect to the final ResNet block activations.
+    """
 
     import numpy as np
-    from pytorch_grad_cam import GradCAMPlusPlus
+    import torch
+    import torch.nn.functional as functional
 
     target_layer = model.base_model.layer4[-1]
-    target = AttributeOutputTarget(label_index, original_present)
-    cam_input = original_normalized.detach().requires_grad_(True)
-    with GradCAMPlusPlus(
-        model=model,
-        target_layers=[target_layer],
-    ) as cam:
-        saliency = cam(
-            input_tensor=cam_input,
-            targets=[target],
+    captured: list[Any] = []
+    handle = target_layer.register_forward_hook(
+        lambda _module, _inputs, output: captured.append(output)
+    )
+    try:
+        cam_input = original_normalized.detach().requires_grad_(True)
+        model_output = model(cam_input)
+        score = model_output[0, label_index]
+        if not original_present:
+            score = 1.0 - score
+        if len(captured) != 1:
+            raise RuntimeError("Grad-CAM++ did not capture target activations")
+        activations = captured[0]
+        gradients = torch.autograd.grad(
+            score,
+            activations,
+            retain_graph=False,
+            create_graph=False,
         )[0]
-    return np.asarray(saliency, dtype=np.float32)
+    finally:
+        handle.remove()
+
+    # Grad-CAM++ alpha coefficients and channel weights. The small epsilon
+    # keeps regions with near-zero derivatives numerically well-defined.
+    gradients_2 = gradients.square()
+    gradients_3 = gradients_2 * gradients
+    denominator = 2.0 * gradients_2 + (
+        activations * gradients_3
+    ).sum(dim=(-2, -1), keepdim=True)
+    alphas = gradients_2 / (denominator + 1e-8)
+    channel_weights = (alphas * gradients.relu()).sum(dim=(-2, -1), keepdim=True)
+    saliency = (channel_weights * activations).sum(dim=1, keepdim=True).relu()
+    saliency = functional.interpolate(
+        saliency,
+        size=cam_input.shape[-2:],
+        mode="bilinear",
+        align_corners=False,
+    )[0, 0]
+    saliency = saliency / saliency.amax().clamp_min(1e-8)
+    return np.asarray(saliency.detach().cpu(), dtype=np.float32)
 
 
 def split_horizontal_grid(grid: Any, *, count: int, crop_width: int):

@@ -33,8 +33,6 @@ PACKAGE_MODULES = {
     "transformers": "transformers",
     "accelerate": "accelerate",
     "safetensors": "safetensors",
-    "open-clip-torch": "open_clip",
-    "grad-cam": "pytorch_grad_cam",
 }
 
 
