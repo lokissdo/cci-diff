@@ -27,6 +27,7 @@ def assert_standalone_command_contract(source: str, *, mode: str) -> None:
     assert "torch.backends.mps.is_available()" in source
     assert "'--classifier_path', CLASSIFIER_PATH" in source
     assert "'--identity_model_path', IDENTITY_MODEL_PATH" in source
+    assert "if not IS_KAGGLE and not" in source
 
 
 def test_global_discovery_notebook_is_two_task_resumable_and_max_four():
