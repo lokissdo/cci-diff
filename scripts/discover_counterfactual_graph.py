@@ -166,7 +166,9 @@ def _write_execution_graph(
     payload["discovery"] = {
         "graph_type": "classifier_counterfactual_influence",
         "selection_status": result.selection_status,
+        "selection_rule": "pareto_target_efficiency_v1",
         "required_flip_rate": result.required_flip_rate,
+        "required_flip_rate_role": "legacy_compatibility_only",
         "selected_regions": list(result.selected_regions),
     }
     output_path.write_text(

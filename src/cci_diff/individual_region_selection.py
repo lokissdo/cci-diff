@@ -134,9 +134,17 @@ def load_frozen_influence_policy(
         region = str(edge.get("target", "")).strip()
         if region:
             verified.append(region)
-    verified_regions = _canonical_regions(verified)
-    if not verified_regions:
+    audit_regions = _canonical_regions(verified)
+    if not audit_regions:
         raise ValueError("Influence graph has no verified regions")
+    generation_regions = payload.get("generation_regions")
+    verified_regions = (
+        _canonical_regions(generation_regions)
+        if generation_regions is not None
+        else audit_regions
+    )
+    if not verified_regions:
+        raise ValueError("Influence graph has no generation regions")
 
     effects = {}
     for item in payload.get("region_set_evidence") or []:
@@ -147,6 +155,8 @@ def load_frozen_influence_policy(
             raise ValueError("Malformed region-set evidence") from error
         if not regions or not math.isfinite(effect):
             raise ValueError("Malformed region-set evidence")
+        if not set(regions).issubset(verified_regions):
+            continue
         if regions in effects:
             raise ValueError(f"Duplicate region-set evidence: {regions}")
         effects[regions] = effect
@@ -155,7 +165,11 @@ def load_frozen_influence_policy(
         target=str(payload.get("target", "")),
         desired_value=desired_value,
         verified_regions=verified_regions,
-        fallback_regions=tuple(payload.get("selected_regions") or ()),
+        fallback_regions=(
+            verified_regions
+            if generation_regions is not None
+            else tuple(payload.get("selected_regions") or ())
+        ),
         region_set_effects=effects,
         graph_path=str(graph_path),
         graph_sha256=sha256_file(graph_path),

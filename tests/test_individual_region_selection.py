@@ -88,6 +88,30 @@ def test_load_frozen_influence_policy_reads_verified_regions_and_effects(
         policy.region_set_effects[("mouth",)] = 1.0
 
 
+def test_new_graph_limits_generation_regions_but_preserves_audit_edges(
+    tmp_path,
+):
+    payload = influence_payload()
+    payload["generation_regions"] = ["mouth"]
+    payload["verified_edges"].append(
+        {
+            "source": "Smiling",
+            "target": "skin",
+            "relation": "classifier_counterfactual_influence",
+        }
+    )
+    payload["region_set_evidence"].append(
+        {"regions": ["skin"], "mean_effect": 0.95}
+    )
+    path = tmp_path / "influence_graph.json"
+    path.write_text(json.dumps(payload), encoding="utf-8")
+
+    policy = load_frozen_influence_policy(path)
+
+    assert policy.verified_regions == ("mouth",)
+    assert ("skin",) not in policy.region_set_effects
+
+
 @pytest.mark.parametrize(
     ("update", "message"),
     (

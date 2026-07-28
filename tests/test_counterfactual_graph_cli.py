@@ -45,6 +45,11 @@ def write_results(path):
 def test_read_and_discover_graph_writes_evidence_artifacts(tmp_path):
     results = tmp_path / "intervention_results.csv"
     write_results(results)
+    template = tmp_path / "template.json"
+    template.write_text(
+        json.dumps({"region": {"components": [], "audit_role": "original"}}),
+        encoding="utf-8",
+    )
 
     observations = read_observations(results)
     result = discover_graph(
@@ -54,6 +59,7 @@ def test_read_and_discover_graph_writes_evidence_artifacts(tmp_path):
         minimum_samples=4,
         bootstrap_samples=100,
         random_seed=7,
+        template_graph_path=template,
     )
 
     assert len(observations) == 12
@@ -73,6 +79,17 @@ def test_read_and_discover_graph_writes_evidence_artifacts(tmp_path):
     )
     assert any(row["pareto_optimal"] == "True" for row in metrics)
     assert (tmp_path / "analysis" / "interactions.csv").is_file()
+    execution = json.loads(
+        (
+            tmp_path / "analysis" / "selected_execution_graph.json"
+        ).read_text()
+    )
+    assert execution["discovery"]["selection_rule"] == (
+        "pareto_target_efficiency_v1"
+    )
+    assert execution["discovery"]["required_flip_rate_role"] == (
+        "legacy_compatibility_only"
+    )
     report = (tmp_path / "analysis" / "discovery_report.md").read_text()
     assert "Pareto target-efficiency selection" in report
     assert "Legacy required flip rate" in report

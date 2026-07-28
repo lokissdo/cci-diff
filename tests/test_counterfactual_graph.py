@@ -180,6 +180,28 @@ def test_aggregation_ignores_missing_optional_metrics_and_rejects_duplicates():
         aggregate_region_sets([row, row], bootstrap_samples=10)
 
 
+def test_aggregation_requires_complete_mask_area_for_region_selection():
+    complete = observation(
+        sample_id=1,
+        regions=("mouth",),
+        source_probability=0.9,
+        output_probability=0.3,
+        mask_fraction=0.04,
+    )
+    missing = observation(
+        sample_id=2,
+        regions=("mouth",),
+        source_probability=0.9,
+        output_probability=0.4,
+    )
+
+    result = aggregate_region_sets(
+        [complete, missing], bootstrap_samples=10
+    )[("mouth",)]
+
+    assert result.mean_mask_fraction is None
+
+
 def test_aggregation_rejects_sources_that_already_satisfy_target():
     row = observation(
         sample_id=1,
@@ -312,6 +334,21 @@ def test_selection_requires_positive_finite_mask_area(mask_fraction):
         select_region_set({invalid.regions: invalid})
 
 
+def test_selection_excludes_incomplete_candidate_when_valid_exists():
+    valid = evidence(
+        ("mouth",), flip_rate=0.6, mean_effect=0.4, mask_fraction=0.04
+    )
+    incomplete = evidence(
+        ("skin",), flip_rate=1.0, mean_effect=0.9, mask_fraction=None
+    )
+
+    selected = select_region_set(
+        {valid.regions: valid, incomplete.regions: incomplete}
+    )
+
+    assert selected.regions == ("mouth",)
+
+
 def test_graph_serialization_only_verifies_supported_positive_singletons():
     supported = evidence(
         ("mouth",),
@@ -343,6 +380,7 @@ def test_graph_serialization_only_verifies_supported_positive_singletons():
 
     assert payload["type"] == "classifier_counterfactual_influence"
     assert payload["selected_regions"] == ["mouth"]
+    assert payload["generation_regions"] == ["mouth"]
     assert payload["selection_status"] == "pareto_efficient"
     assert payload["provenance"]["selection_rule"] == (
         "pareto_target_efficiency_v1"

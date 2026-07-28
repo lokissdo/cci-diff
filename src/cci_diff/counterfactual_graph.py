@@ -144,6 +144,7 @@ class InfluenceGraphResult:
             "target": self.target,
             "desired_value": self.desired_value,
             "selected_regions": list(self.selected_regions),
+            "generation_regions": list(self.selected_regions),
             "selection_status": self.selection_status,
             "required_flip_rate": self.required_flip_rate,
             "minimum_samples": self.minimum_samples,
@@ -230,7 +231,7 @@ def aggregate_region_sets(
             median_effect=float(np.median(sample_effects)),
             effect_ci_low=ci_low,
             effect_ci_high=ci_high,
-            mean_mask_fraction=_clustered_optional_mean(
+            mean_mask_fraction=_clustered_complete_optional_mean(
                 sample_groups, "mask_fraction"
             ),
             mean_identity_cosine=_clustered_optional_mean(
@@ -288,9 +289,16 @@ def pareto_region_sets(
 
     if not evidence_by_regions:
         raise ValueError("At least one region-set evidence item is required")
-    candidates = tuple(evidence_by_regions.values())
-    for item in candidates:
-        _validate_selection_evidence(item)
+    candidates = tuple(
+        item
+        for item in evidence_by_regions.values()
+        if _is_selection_eligible(item)
+    )
+    if not candidates:
+        raise ValueError(
+            "No region-set evidence has complete finite mean effect, "
+            "flip rate, and mask fraction"
+        )
     frontier = [
         candidate
         for candidate in candidates
@@ -312,19 +320,24 @@ def annotate_region_sets(
         item.regions for item in pareto_region_sets(evidence_by_regions)
     }
     candidates = tuple(evidence_by_regions.values())
+    eligible = tuple(item for item in candidates if _is_selection_eligible(item))
     return tuple(
         replace(
             item,
             pareto_optimal=item.regions in frontier_regions,
-            target_efficiency=target_efficiency(item),
+            target_efficiency=(
+                target_efficiency(item) if item in eligible else None
+            ),
             dominated_by=tuple(
                 sorted(
                     other.regions
-                    for other in candidates
+                    for other in eligible
                     if other.regions != item.regions
                     and _dominates(other, item)
                 )
-            ),
+            )
+            if item in eligible
+            else (),
         )
         for item in sorted(candidates, key=lambda value: value.regions)
     )
@@ -467,6 +480,21 @@ def _clustered_optional_mean(
     return float(np.mean(sample_means)) if sample_means else None
 
 
+def _clustered_complete_optional_mean(
+    sample_groups: Mapping[int, list[InterventionObservation]],
+    field_name: str,
+) -> float | None:
+    """Average an optional metric only when every observation provides it."""
+
+    if any(
+        getattr(row, field_name) is None
+        for rows in sample_groups.values()
+        for row in rows
+    ):
+        return None
+    return _clustered_optional_mean(sample_groups, field_name)
+
+
 def _optional_cost(value: float | None) -> float:
     return float(value) if value is not None else math.inf
 
@@ -487,6 +515,17 @@ def _validate_selection_evidence(item: RegionSetEvidence) -> None:
         raise ValueError(
             "mean mask fraction must be positive and finite for region selection"
         )
+
+
+def _is_selection_eligible(item: RegionSetEvidence) -> bool:
+    area = item.mean_mask_fraction
+    return (
+        math.isfinite(item.mean_effect)
+        and math.isfinite(item.flip_rate)
+        and area is not None
+        and math.isfinite(area)
+        and area > 0.0
+    )
 
 
 def _dominates(left: RegionSetEvidence, right: RegionSetEvidence) -> bool:
