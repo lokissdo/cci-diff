@@ -89,6 +89,109 @@ class CelebAAttributeConstraint:
         return (torch.sigmoid(logit).mean() - self._source_probability).abs()
 
 
+class NonTargetDriftEvaluator:
+    """Measure smooth probability drift across every non-target attribute."""
+
+    def __init__(
+        self,
+        model: Any,
+        *,
+        target_index: int,
+        input_size: int,
+        huber_delta: float,
+    ) -> None:
+        if isinstance(target_index, bool) or target_index < 0:
+            raise ValueError("target_index must be non-negative")
+        if input_size <= 0 or huber_delta <= 0:
+            raise ValueError("input_size and huber_delta must be positive")
+        self.model = model
+        self.target_index = target_index
+        self.input_size = input_size
+        self.huber_delta = huber_delta
+        self._source_probabilities = None
+
+    @property
+    def non_target_indices(self) -> tuple[int, ...]:
+        if self._source_probabilities is None:
+            raise RuntimeError("non-target drift evaluator is not bound")
+        return tuple(
+            index
+            for index in range(self._source_probabilities.shape[-1])
+            if index != self.target_index
+        )
+
+    def bind(self, context: ConstraintContext) -> None:
+        import torch
+
+        with torch.no_grad():
+            logits = classifier_logits(
+                self.model,
+                context.source_image,
+                size=self.input_size,
+            )
+            if self.target_index >= logits.shape[-1]:
+                raise ValueError(
+                    "target_index must identify a classifier output"
+                )
+            if logits.shape[-1] < 2:
+                raise ValueError(
+                    "non-target drift requires at least two classifier outputs"
+                )
+            self._source_probabilities = (
+                torch.sigmoid(logits).mean(dim=0).detach()
+            )
+
+    def measure(self, image: Any) -> Any:
+        import torch
+        import torch.nn.functional as functional
+
+        current, source, indices = self._selected_probabilities(image)
+        delta = current.index_select(0, indices) - source.index_select(0, indices)
+        return functional.huber_loss(
+            delta,
+            torch.zeros_like(delta),
+            delta=self.huber_delta,
+            reduction="mean",
+        )
+
+    def audit(self, image: Any) -> dict[str, Any]:
+        import torch
+
+        with torch.no_grad():
+            current, source, indices = self._selected_probabilities(image)
+            absolute_drift = (
+                current.index_select(0, indices)
+                - source.index_select(0, indices)
+            ).abs()
+        return {
+            "excluded_index": self.target_index,
+            "included_indices": list(self.non_target_indices),
+            "absolute_probability_drift": absolute_drift.cpu().tolist(),
+            "mean_absolute_probability_drift": float(
+                absolute_drift.mean().item()
+            ),
+        }
+
+    def _selected_probabilities(self, image: Any):
+        import torch
+
+        if self._source_probabilities is None:
+            raise RuntimeError("non-target drift evaluator is not bound")
+        current = torch.sigmoid(
+            classifier_logits(self.model, image, size=self.input_size)
+        ).mean(dim=0)
+        source = self._source_probabilities.to(
+            device=current.device,
+            dtype=current.dtype,
+        )
+        indices = torch.as_tensor(
+            self.non_target_indices,
+            device=current.device,
+            dtype=torch.long,
+        )
+        return current, source, indices
+
+
 class OutsideL1Constraint:
     def __init__(self, name: str, tolerance: float) -> None:
         self.name = name

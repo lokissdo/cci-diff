@@ -16,6 +16,85 @@ class MeanClassifier:
 
 
 class TestConstraintEvaluators(unittest.TestCase):
+    def test_non_target_drift_excludes_target_and_is_zero_for_source(self):
+        import torch
+
+        from cci_diff.constraints import (
+            ConstraintContext,
+            NonTargetDriftEvaluator,
+        )
+
+        class Model:
+            def forward_logits(self, images):
+                means = images.mean(dim=(2, 3))
+                return torch.stack(
+                    [
+                        means[:, 0],
+                        means[:, 1],
+                        means[:, 2],
+                        means.mean(dim=1),
+                    ],
+                    dim=1,
+                )
+
+        source = torch.full((1, 3, 2, 2), 0.25)
+        mask = torch.ones_like(source[:, :1])
+        evaluator = NonTargetDriftEvaluator(
+            Model(),
+            target_index=1,
+            input_size=2,
+            huber_delta=0.02,
+        )
+        evaluator.bind(ConstraintContext(source, mask, mask))
+
+        self.assertAlmostEqual(evaluator.measure(source).item(), 0.0)
+        changed = source.clone().requires_grad_(True)
+        with torch.no_grad():
+            changed[:, 0] += 0.1
+        evaluator.measure(changed).backward()
+
+        self.assertEqual(evaluator.non_target_indices, (0, 2, 3))
+        self.assertIsNotNone(changed.grad)
+
+    def test_non_target_drift_audit_reports_continuous_mean_and_values(self):
+        import torch
+
+        from cci_diff.constraints import (
+            ConstraintContext,
+            NonTargetDriftEvaluator,
+        )
+
+        class Model:
+            def forward_logits(self, images):
+                means = images.mean(dim=(2, 3))
+                return torch.stack(
+                    [
+                        means[:, 0],
+                        means[:, 1],
+                        means[:, 2],
+                        means.mean(dim=1),
+                    ],
+                    dim=1,
+                )
+
+        source = torch.full((1, 3, 2, 2), 0.25)
+        changed = source.clone()
+        changed[:, 2] = 0.75
+        mask = torch.ones_like(source[:, :1])
+        evaluator = NonTargetDriftEvaluator(
+            Model(),
+            target_index=1,
+            input_size=2,
+            huber_delta=0.02,
+        )
+        evaluator.bind(ConstraintContext(source, mask, mask))
+
+        payload = evaluator.audit(changed)
+
+        self.assertEqual(payload["excluded_index"], 1)
+        self.assertEqual(len(payload["absolute_probability_drift"]), 3)
+        self.assertGreater(payload["mean_absolute_probability_drift"], 0)
+
     def test_target_returns_differentiable_mean_logit(self):
         import torch
 
