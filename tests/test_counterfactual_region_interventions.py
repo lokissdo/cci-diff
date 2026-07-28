@@ -15,6 +15,47 @@ from scripts.run_counterfactual_region_interventions import (
 )
 
 
+def test_parser_keeps_early_stop_by_default_and_can_disable_it():
+    parser = build_arg_parser()
+
+    defaults = parser.parse_args(
+        [
+            "--template_graph",
+            "graph.json",
+            "--sample_ids",
+            "1",
+            "--candidate_regions",
+            "mouth",
+            "--classifier_path",
+            "classifier.pth",
+            "--identity_model_path",
+            "identity.ts",
+            "--output_dir",
+            "output",
+        ]
+    )
+    disabled = parser.parse_args(
+        [
+            "--template_graph",
+            "graph.json",
+            "--sample_ids",
+            "1",
+            "--candidate_regions",
+            "mouth",
+            "--classifier_path",
+            "classifier.pth",
+            "--identity_model_path",
+            "identity.ts",
+            "--output_dir",
+            "output",
+            "--disable_early_stop",
+        ]
+    )
+
+    assert defaults.disable_early_stop is False
+    assert disabled.disable_early_stop is True
+
+
 def graph_payload():
     return {
         "version": 1,

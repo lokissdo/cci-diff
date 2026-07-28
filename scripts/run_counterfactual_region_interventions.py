@@ -449,6 +449,7 @@ def run_interventions(args: argparse.Namespace) -> dict[str, Any]:
             len(args.sample_ids) * len(args.seeds) * len(region_sets)
         ),
         "stop_flip_rate": args.stop_flip_rate,
+        "disable_early_stop": getattr(args, "disable_early_stop", False),
         "planned_region_sets": [list(regions) for regions in region_sets],
         "executed_region_sets": [],
         "cardinality_results": [],
@@ -598,7 +599,11 @@ def run_interventions(args: argparse.Namespace) -> dict[str, Any]:
             json.dumps(manifest, indent=2, allow_nan=False),
             encoding="utf-8",
         )
-        if not args.dry_run and summary["threshold_reached"]:
+        if (
+            not args.dry_run
+            and not getattr(args, "disable_early_stop", False)
+            and summary["threshold_reached"]
+        ):
             manifest["stop_reason"] = "raw_flip_threshold_reached"
             stopped = True
             break
@@ -658,6 +663,11 @@ def build_arg_parser() -> argparse.ArgumentParser:
     parser.add_argument("--candidate_regions", nargs="+", required=True)
     parser.add_argument("--max_set_size", type=int, default=2)
     parser.add_argument("--stop_flip_rate", type=float, default=0.96)
+    parser.add_argument(
+        "--disable_early_stop",
+        action="store_true",
+        help="Evaluate every region-set cardinality even after the flip threshold.",
+    )
     parser.add_argument("--seeds", nargs="+", type=int, default=[42])
     parser.add_argument(
         "--image_root",
