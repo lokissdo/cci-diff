@@ -28,6 +28,8 @@ def assert_standalone_command_contract(source: str, *, mode: str) -> None:
     assert "'--classifier_path', CLASSIFIER_PATH" in source
     assert "'--identity_model_path', IDENTITY_MODEL_PATH" in source
     assert "if not IS_KAGGLE and not" in source
+    assert "asset_args = [] if IS_KAGGLE else" in source
+    assert "*asset_args" in source
 
 
 def test_global_discovery_notebook_is_two_task_resumable_and_max_four():
