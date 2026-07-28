@@ -34,6 +34,345 @@ class TestSD2CleanPrediction(unittest.TestCase):
 
         self.assertTrue(torch.allclose(result, torch.tensor([1.75])))
 
+    def test_clean_delta_to_epsilon_delta_round_trips_clean_shift(self):
+        import torch
+
+        from cci_diff.adapters.sd2_clean_cci import (
+            clean_delta_to_epsilon_delta,
+            predict_clean_latents,
+        )
+
+        sample = torch.tensor([1.0])
+        epsilon = torch.tensor([0.2])
+        alpha = torch.tensor(0.25)
+        requested = torch.tensor([-0.1])
+        mapped = clean_delta_to_epsilon_delta(requested, alpha)
+
+        before = predict_clean_latents(sample, epsilon, alpha, "epsilon")
+        after = predict_clean_latents(
+            sample,
+            epsilon + mapped,
+            alpha,
+            "epsilon",
+        )
+
+        self.assertTrue(torch.allclose(after - before, requested))
+
+    def test_trust_hook_skips_below_reliability_alpha(self):
+        import tempfile
+        from pathlib import Path
+
+        import torch
+
+        from cci_diff.adapters.sd2_clean_cci import (
+            TrustRegionCleanCCIGuidanceHook,
+        )
+        from cci_diff.cci_trace import JSONLTraceWriter
+        from cci_diff.concept_graph import TrustRegionSpec
+        from cci_diff.sd2_bld_backend import SD2DenoisingStep
+
+        class Scheduler:
+            alphas_cumprod = torch.tensor([0.05])
+            config = SimpleNamespace(prediction_type="epsilon")
+
+        class Controller:
+            spec = TrustRegionSpec()
+
+            def compute_update(self, **kwargs):
+                raise AssertionError("unreliable steps must not be evaluated")
+
+        step = SD2DenoisingStep(
+            0,
+            torch.tensor(0),
+            "target",
+            torch.ones(2),
+            torch.zeros(2),
+            torch.zeros(2),
+            torch.ones(2),
+            torch.ones(2),
+            1,
+            0.0,
+        )
+        with tempfile.TemporaryDirectory() as tmpdir:
+            trace = Path(tmpdir) / "trace.jsonl"
+            hook = TrustRegionCleanCCIGuidanceHook(
+                scheduler=Scheduler(),
+                vae=object(),
+                target_evaluator=object(),
+                drift_evaluator=object(),
+                constraint_evaluators=(),
+                controller=Controller(),
+                desired_value=0,
+                target_probability=0.8,
+                trace_writer=JSONLTraceWriter(trace),
+            )
+
+            self.assertIsNone(hook(step))
+            self.assertEqual(trace.read_text(encoding="utf-8"), "")
+
+    def test_trust_hook_records_clean_and_noise_displacements(self):
+        import tempfile
+        from pathlib import Path
+
+        import torch
+
+        from cci_diff.adapters.sd2_clean_cci import (
+            TrustRegionCleanCCIGuidanceHook,
+        )
+        from cci_diff.cci_trace import JSONLTraceWriter, load_cci_trace
+        from cci_diff.concept_graph import TrustRegionSpec
+        from cci_diff.constraints import ConstraintContext
+        from cci_diff.sd2_bld_backend import SD2DenoisingStep
+        from cci_diff.trust_region_controller import TrustRegionResult
+
+        class Scheduler:
+            alphas_cumprod = torch.tensor([0.5])
+            config = SimpleNamespace(prediction_type="epsilon")
+
+        class VAE:
+            def decode(self, latent):
+                return SimpleNamespace(sample=latent * (2.0 * 0.18215) - 1.0)
+
+        class Target:
+            def logit(self, image):
+                return 2.0 * image[0]
+
+        class Drift:
+            def bind(self, context: ConstraintContext):
+                self.source = context.source_image
+
+            def measure(self, image):
+                return (image[1] - self.source[1]).square()
+
+            def audit(self, image):
+                value = float((image[1] - self.source[1]).abs().item())
+                return {"mean_absolute_probability_drift": value}
+
+        class Safety:
+            def __init__(self, name):
+                self.name = name
+                self.tolerance = 2.0
+
+            def bind(self, context: ConstraintContext):
+                self.source = context.source_image
+
+            def measure(self, image):
+                return (image - self.source).abs().mean()
+
+        class Controller:
+            spec = TrustRegionSpec(reliability_alpha_min=0.1)
+            radius = spec.initial_radius
+
+            def compute_update(self, **kwargs):
+                return TrustRegionResult(
+                    torch.tensor([-0.05, -0.05]),
+                    {
+                        "target": {"guard_mode": "progress"},
+                        "solver": {
+                            "requested_target_progress": 0.05,
+                            "step_norm": 0.05,
+                        },
+                        "update": {"skip_reason": None},
+                    },
+                )
+
+            def observe_outcome(self, **kwargs):
+                self.outcome = kwargs
+
+        step = SD2DenoisingStep(
+            0,
+            torch.tensor(0),
+            "target",
+            torch.ones(2),
+            torch.zeros(2),
+            torch.zeros(2),
+            torch.ones(2),
+            torch.ones(2),
+            1,
+            0.0,
+        )
+        with tempfile.TemporaryDirectory() as tmpdir:
+            trace = Path(tmpdir) / "trace.jsonl"
+            hook = TrustRegionCleanCCIGuidanceHook(
+                scheduler=Scheduler(),
+                vae=VAE(),
+                target_evaluator=Target(),
+                drift_evaluator=Drift(),
+                constraint_evaluators=(
+                    Safety("identity"),
+                    Safety("outside_locality"),
+                ),
+                controller=Controller(),
+                desired_value=0,
+                target_probability=0.8,
+                trace_writer=JSONLTraceWriter(trace),
+            )
+
+            guided = hook(step)
+            hook.observe_retention("scheduler_step", torch.ones(2) - 0.01)
+            hook.observe_retention("blend", torch.ones(2) - 0.005)
+            record = load_cci_trace(trace)[0]
+
+        self.assertIsNotNone(guided)
+        self.assertGreater(record["update"]["clean_delta_norm"], 0)
+        self.assertGreater(record["update"]["epsilon_delta_norm"], 0)
+
+    def test_final_trust_hook_rejects_target_gain_that_worsens_safety(self):
+        import torch
+
+        from cci_diff.adapters.sd2_clean_cci import (
+            FinalPreservationTrustRegionHook,
+        )
+        from cci_diff.concept_graph import TrustRegionSpec
+        from cci_diff.sd2_bld_backend import SD2DenoisingStep
+        from cci_diff.trust_region_controller import TrustRegionResult
+
+        class VAE:
+            def decode(self, latent):
+                return SimpleNamespace(sample=latent)
+
+        class Target:
+            def logit(self, image):
+                return image[0]
+
+        class Drift:
+            def measure(self, image):
+                return image[1].square()
+
+        class Safety:
+            def __init__(self, name, tolerance):
+                self.name = name
+                self.tolerance = tolerance
+
+            def measure(self, image):
+                return image[1].abs()
+
+        class Controller:
+            spec = TrustRegionSpec(final_iterations=1)
+
+            def compute_update(self, **kwargs):
+                return TrustRegionResult(
+                    torch.tensor([1.0, 1.0]),
+                    {"update": {"skip_reason": None}},
+                )
+
+        latents = torch.zeros(2)
+        step = SD2DenoisingStep(
+            1,
+            torch.tensor(0),
+            "target",
+            latents,
+            latents,
+            latents,
+            torch.ones(2),
+            torch.ones(2),
+            1,
+            1.0,
+        )
+        hook = FinalPreservationTrustRegionHook(
+            vae=VAE(),
+            target_evaluator=Target(),
+            drift_evaluator=Drift(),
+            constraint_evaluators=(
+                Safety("identity", 0.1),
+                Safety("outside_locality", 0.1),
+            ),
+            controller=Controller(),
+            desired_value=1,
+            target_probability=0.6,
+        )
+
+        self.assertIsNone(hook(step))
+        self.assertFalse(hook.record["attempts"][0]["accepted"])
+        self.assertEqual(
+            hook.record["attempts"][0]["reason"],
+            "safety_envelope",
+        )
+
+    def test_final_trust_hook_restores_drift_while_maintaining_target(self):
+        import torch
+
+        from cci_diff.adapters.sd2_clean_cci import (
+            FinalPreservationTrustRegionHook,
+        )
+        from cci_diff.concept_graph import TrustRegionSpec
+        from cci_diff.sd2_bld_backend import SD2DenoisingStep
+        from cci_diff.trust_region_controller import TrustRegionResult
+
+        class VAE:
+            def decode(self, latent):
+                return SimpleNamespace(
+                    sample=latent * (2.0 * 0.18215) - 1.0
+                )
+
+        class Target:
+            def logit(self, image):
+                return 2.0 * image[0]
+
+        class Drift:
+            def measure(self, image):
+                return image[1].square()
+
+        class Safety:
+            tolerance = 2.0
+
+            def __init__(self, name):
+                self.name = name
+
+            def measure(self, image):
+                return image[1].abs()
+
+        class Controller:
+            spec = TrustRegionSpec(
+                final_iterations=1,
+                final_cumulative_radius=0.6,
+            )
+
+            def compute_update(self, **kwargs):
+                return TrustRegionResult(
+                    torch.tensor([0.0, -0.5]),
+                    {"update": {"skip_reason": None}},
+                )
+
+        latents = torch.tensor([2.0, 1.0])
+        step = SD2DenoisingStep(
+            1,
+            torch.tensor(0),
+            "target",
+            latents,
+            latents,
+            latents,
+            torch.ones(2),
+            torch.ones(2),
+            1,
+            1.0,
+        )
+        hook = FinalPreservationTrustRegionHook(
+            vae=VAE(),
+            target_evaluator=Target(),
+            drift_evaluator=Drift(),
+            constraint_evaluators=(
+                Safety("identity"),
+                Safety("outside_locality"),
+            ),
+            controller=Controller(),
+            desired_value=1,
+            target_probability=0.8,
+        )
+
+        corrected = hook(step)
+
+        self.assertIsNotNone(corrected)
+        self.assertGreaterEqual(hook.record["final_probability"], 0.8)
+        self.assertLess(
+            hook.record["final_drift"],
+            hook.record["initial_drift"],
+        )
+        self.assertLessEqual(
+            hook.record["cumulative_norm"],
+            hook.controller.spec.final_cumulative_radius + 1e-6,
+        )
+
     def test_velocity_prediction_matches_diffusers_equation(self):
         import torch
 

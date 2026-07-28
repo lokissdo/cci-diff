@@ -134,6 +134,46 @@ class TestSD2BLDBackendContract(unittest.TestCase):
 
         self.assertIs(result, original_noise)
 
+    def test_active_guidance_observes_scheduler_and_blend_retention_once(self):
+        from cci_diff.sd2_bld_backend import (
+            SD2DenoisingStep,
+            apply_cci_guidance,
+            observe_cci_retention,
+        )
+
+        class Hook:
+            def __init__(self):
+                self.observations = []
+
+            def __call__(self, step):
+                return "guided"
+
+            def observe_retention(self, phase, latents):
+                self.observations.append((phase, latents))
+
+        hook = Hook()
+        step = SD2DenoisingStep(
+            step_index=0,
+            timestep=17,
+            prompt="target",
+            latents="before",
+            noise_pred="noise",
+            source_latents="source",
+            latent_mask="mask",
+        )
+
+        self.assertEqual(apply_cci_guidance("noise", step, hook), "guided")
+        observe_cci_retention(hook, "scheduler_step", "scheduled")
+        observe_cci_retention(hook, "blend", "blended")
+
+        self.assertEqual(
+            hook.observations,
+            [
+                ("scheduler_step", "scheduled"),
+                ("blend", "blended"),
+            ],
+        )
+
     def test_apply_cci_latent_guidance_uses_hook_result_when_present(self):
         from cci_diff.sd2_bld_backend import (
             SD2DenoisingStep,

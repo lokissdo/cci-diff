@@ -96,7 +96,24 @@ def apply_cci_guidance(
     if hook is None:
         return noise_pred
     guided_noise = hook(step)
+    if hasattr(hook, "observe_retention"):
+        setattr(hook, "current_step_active", guided_noise is not None)
     return noise_pred if guided_noise is None else guided_noise
+
+
+def observe_cci_retention(
+    hook: CCIGuidanceHook | None,
+    phase: str,
+    latents: Any,
+) -> None:
+    """Report scheduler/blend retention only for an active guidance step."""
+
+    if (
+        hook is not None
+        and getattr(hook, "current_step_active", False)
+        and hasattr(hook, "observe_retention")
+    ):
+        hook.observe_retention(phase, latents)
 
 
 def apply_cci_latent_guidance_hook(
@@ -335,6 +352,11 @@ class BlendedLatentDiffusionSD2Backend:
                 progress=progress,
             )
             states.append(diffusion_state_from_step(step, phase="scheduler_step"))
+            observe_cci_retention(
+                cci_guidance_hook,
+                "scheduler_step",
+                latents,
+            )
 
             if cci_latent_guidance_hook is not None and not getattr(
                 cci_latent_guidance_hook,
@@ -377,6 +399,7 @@ class BlendedLatentDiffusionSD2Backend:
                     noise_source_latents,
                 )
             latents = replace_nonfinite_latents(latents, noise_source_latents)
+            observe_cci_retention(cci_guidance_hook, "blend", latents)
             if cci_latent_guidance_hook is not None and getattr(
                 cci_latent_guidance_hook,
                 "apply_after_blend",
