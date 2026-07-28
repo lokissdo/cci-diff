@@ -204,7 +204,7 @@ class BlendedLatentDiffusionSD2Backend:
             pipe.load_lora_weights(lora_path)
         self.device = device
         self.torch_dtype = dtype
-        self.vae = pipe.vae.to(device).eval()
+        self.vae = pipe.vae.to(device=device, dtype=torch.float32).eval()
         self.tokenizer = pipe.tokenizer
         self.text_encoder = pipe.text_encoder.to(device).eval()
         self.unet = pipe.unet.to(device).eval()
@@ -450,11 +450,12 @@ class BlendedLatentDiffusionSD2Backend:
         image = Image.open(image_path).convert("RGB").resize((height, width), Image.BILINEAR)
         image = np.array(image)[:, :, :3]
         image = torch.from_numpy(image).float() / 127.5 - 1
-        image = image.permute(2, 0, 1).unsqueeze(0).to(self.device)
-        if self.torch_dtype == torch.float16:
-            image = image.half()
+        image = image.permute(2, 0, 1).unsqueeze(0).to(
+            device=self.device,
+            dtype=torch.float32,
+        )
         latents = self.vae.encode(image)["latent_dist"].mean
-        return latents * 0.18215
+        return (latents * 0.18215).to(dtype=self.torch_dtype)
 
     def _read_mask(
         self,
@@ -502,7 +503,7 @@ class BlendedLatentDiffusionSD2Backend:
         raise ValueError("initial_latent_mode must be random or source_noise")
 
     def _decode_latents(self, latents, *, np):
-        latents = 1 / 0.18215 * latents
+        latents = (1 / 0.18215 * latents).to(dtype=self.vae.dtype)
         decoded_images = self.vae.decode(latents).sample
         images = (decoded_images / 2 + 0.5).clamp(0, 1)
         images = images.detach().cpu().permute(0, 2, 3, 1).numpy()

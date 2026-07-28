@@ -23,8 +23,9 @@ class FakeComponent:
         self.eval_called = False
         self.requires_grad_value = None
 
-    def to(self, device):
+    def to(self, device=None, dtype=None):
         self.device = device
+        self.dtype = dtype
         return self
 
     def eval(self):
@@ -297,6 +298,7 @@ class TestSD2BLDBackendContract(unittest.TestCase):
         self.assertEqual(FakePipelineFactory.last_pipeline.loaded_lora_path, "local-lora")
         self.assertEqual(FakeScheduler.last_kwargs["beta_schedule"], "scaled_linear")
         self.assertTrue(FakePipelineFactory.last_pipeline.vae.eval_called)
+        self.assertEqual(FakePipelineFactory.last_pipeline.vae.dtype, FakeTorch.float32)
         self.assertFalse(FakePipelineFactory.last_pipeline.vae.requires_grad_value)
         self.assertTrue(FakePipelineFactory.last_pipeline.text_encoder.eval_called)
         self.assertFalse(

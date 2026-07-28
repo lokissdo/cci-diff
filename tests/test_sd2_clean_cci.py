@@ -136,6 +136,68 @@ class TestSD2CleanPrediction(unittest.TestCase):
         self.assertTrue(torch.all((decoded >= 0.0) & (decoded <= 1.0)))
         self.assertIsNotNone(latents.grad)
 
+    def test_clean_hook_uses_float32_guidance_for_float16_denoising(self):
+        import tempfile
+        from pathlib import Path
+
+        import torch
+
+        from cci_diff.adapters.sd2_clean_cci import CleanCCIGuidanceHook
+        from cci_diff.cci_trace import JSONLTraceWriter
+        from cci_diff.constraint_controller import ConstraintFeedbackController
+        from cci_diff.sd2_bld_backend import SD2DenoisingStep
+
+        class Scheduler:
+            alphas_cumprod = torch.linspace(0.01, 0.99, 1000)
+            config = SimpleNamespace(prediction_type="epsilon")
+
+        class VAE:
+            def decode(self, latent):
+                return SimpleNamespace(sample=latent[:, :3] * 0.02)
+
+        class Target:
+            def logit(self, image):
+                return image.mean()
+
+        class RecordingController(ConstraintFeedbackController):
+            guidance_dtype = None
+
+            def compute_update(self, **kwargs):
+                self.guidance_dtype = kwargs["latents"].dtype
+                return super().compute_update(**kwargs)
+
+        controller = RecordingController(self.controller_spec())
+        latents = torch.ones((1, 4, 2, 2), dtype=torch.float16)
+        noise = torch.zeros_like(latents)
+        mask = torch.ones((1, 1, 2, 2), dtype=torch.float16)
+        step = SD2DenoisingStep(
+            4,
+            torch.tensor(500),
+            "neutral expression",
+            latents,
+            noise,
+            torch.zeros_like(latents),
+            mask,
+            mask,
+            11,
+            0.4,
+        )
+        with tempfile.TemporaryDirectory() as tmpdir:
+            hook = CleanCCIGuidanceHook(
+                scheduler=Scheduler(),
+                vae=VAE(),
+                target_evaluator=Target(),
+                constraint_evaluators=(),
+                controller=controller,
+                desired_value=0,
+                target_probability=0.8,
+                trace_writer=JSONLTraceWriter(Path(tmpdir) / "trace.jsonl"),
+            )
+            guided = hook(step)
+
+        self.assertEqual(controller.guidance_dtype, torch.float32)
+        self.assertEqual(guided.dtype, torch.float16)
+
     def test_clean_hook_changes_noise_traces_target_and_detaches_unet_output(self):
         import tempfile
         from pathlib import Path

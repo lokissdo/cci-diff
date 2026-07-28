@@ -316,7 +316,9 @@ class CleanCCIGuidanceHook:
         if eta is None:
             return None
         self._sample_mps_memory(torch)
-        guided_latents = step.latents.detach().clone().requires_grad_(True)
+        guided_latents = (
+            step.latents.detach().float().clone().requires_grad_(True)
+        )
         alpha = alpha_prod_for_step(
             self.scheduler,
             step.timestep,
