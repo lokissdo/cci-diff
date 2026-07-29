@@ -93,7 +93,7 @@ def test_prepare_kernel_pins_requested_git_revision(tmp_path):
                         "cell_type": "code",
                         "source": [
                             "GIT_REF = 'main'\n",
-                            "SAMPLE_COUNT = 300\n",
+                            "SAMPLE_COUNT = 100\n",
                         ],
                     }
                 ]

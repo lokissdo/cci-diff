@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import re
 import shutil
 import subprocess
 import sys
@@ -150,8 +151,10 @@ def prepare_kernel(
         if cell.get("cell_type") != "code":
             continue
         source = "".join(cell.get("source", []))
-        source = source.replace(
-            "SAMPLE_COUNT = 300", f"SAMPLE_COUNT = {sample_count}"
+        source = re.sub(
+            r"(?m)^SAMPLE_COUNT = \d+$",
+            f"SAMPLE_COUNT = {sample_count}",
+            source,
         )
         source = source.replace("GIT_REF = 'main'", f"GIT_REF = '{git_ref}'")
         source = source.replace(
