@@ -21,6 +21,7 @@ def test_parser_requires_explicit_mode_and_defaults_to_smile():
     args = module.build_parser().parse_args(["--mode", "evaluation"])
 
     assert args.mode == "evaluation"
+    assert args.task == "smile"
     assert args.sample_count == 300
     assert args.max_workers == 0
     assert args.classifier_path is None
@@ -41,6 +42,62 @@ def test_parser_requires_explicit_mode_and_defaults_to_smile():
         "/kaggle/input/datasets/ipythonx/celebamaskhq/"
         "CelebAMask-HQ/CelebAMask-HQ-mask-anno"
     )
+
+
+def test_blond_hair_discovery_task_uses_hair_graph_and_regions():
+    module = load_script()
+
+    task = module.resolve_discovery_task("blond_hair")
+
+    assert task.feature == "hair"
+    assert task.output_key == "blond_hair"
+    assert task.template == Path("examples/graphs/blond_hair_clean_cci.json")
+    assert task.candidate_regions[0] == "hair"
+    assert set(task.candidate_regions) == {
+        "hair",
+        "skin",
+        "left_brow",
+        "right_brow",
+        "left_eye",
+        "right_eye",
+        "left_ear",
+        "right_ear",
+        "hat",
+    }
+
+
+def test_parser_accepts_blond_hair_only_for_discovery():
+    module = load_script()
+
+    args = module.build_parser().parse_args(
+        ["--mode", "discovery", "--task", "blond_hair"]
+    )
+    assert args.task == "blond_hair"
+
+    try:
+        module.validate_args(
+            module.build_parser().parse_args(
+                ["--mode", "evaluation", "--task", "blond_hair"]
+            )
+        )
+    except ValueError as error:
+        assert "smile-only" in str(error)
+    else:
+        raise AssertionError("Expected blond-hair evaluation to be rejected")
+
+
+def test_discovery_paths_are_task_specific(tmp_path):
+    module = load_script()
+    task = module.resolve_discovery_task("blond_hair")
+
+    paths = module.discovery_paths(tmp_path, task)
+
+    assert paths == {
+        "screening": tmp_path / "blond_hair" / "screening",
+        "interventions": tmp_path / "blond_hair" / "interventions",
+        "graph": tmp_path / "blond_hair" / "graph",
+    }
+    assert all("smile" not in str(path) for path in paths.values())
 
 
 def test_standalone_runner_exposes_setup_and_model_download_logs():

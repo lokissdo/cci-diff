@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Run the smile graph-discovery or CCI evaluation workflow on Kaggle."""
+"""Run counterfactual graph discovery or smile CCI evaluation on Kaggle."""
 
 from __future__ import annotations
 
@@ -12,7 +12,7 @@ import sys
 import time
 from argparse import Namespace
 from pathlib import Path
-from typing import Sequence
+from typing import NamedTuple, Sequence
 
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
@@ -34,6 +34,65 @@ PACKAGE_MODULES = {
     "accelerate": "accelerate",
     "safetensors": "safetensors",
 }
+
+
+class DiscoveryTask(NamedTuple):
+    feature: str
+    output_key: str
+    template: Path
+    candidate_regions: tuple[str, ...]
+
+
+DISCOVERY_TASKS = {
+    "smile": DiscoveryTask(
+        feature="smile",
+        output_key="smile",
+        template=Path("examples/graphs/remove_smile_clean_cci.json"),
+        candidate_regions=(
+            "skin",
+            "nose",
+            "mouth",
+            "upper_lip",
+            "lower_lip",
+            "left_eye",
+            "right_eye",
+            "left_brow",
+            "right_brow",
+        ),
+    ),
+    "blond_hair": DiscoveryTask(
+        feature="hair",
+        output_key="blond_hair",
+        template=Path("examples/graphs/blond_hair_clean_cci.json"),
+        candidate_regions=(
+            "hair",
+            "skin",
+            "left_brow",
+            "right_brow",
+            "left_eye",
+            "right_eye",
+            "left_ear",
+            "right_ear",
+            "hat",
+        ),
+    ),
+}
+
+
+def resolve_discovery_task(name: str) -> DiscoveryTask:
+    try:
+        return DISCOVERY_TASKS[name]
+    except KeyError as error:
+        raise ValueError(f"Unsupported discovery task: {name}") from error
+
+
+def discovery_paths(output_root: Path, task: DiscoveryTask) -> dict[str, Path]:
+    task_root = output_root / task.output_key
+    return {
+        "screening": task_root / "screening",
+        "interventions": task_root / "interventions",
+        "graph": task_root / "graph",
+    }
 
 
 def timestamp() -> str:
@@ -348,14 +407,26 @@ def select_discovery_ids(
     args: argparse.Namespace,
     assets: dict[str, Path],
     output_root: Path,
+    task: DiscoveryTask,
 ) -> list[int]:
     ids_path = output_root / "discovery_ids.json"
     if ids_path.is_file():
-        ids = json.loads(ids_path.read_text())["smile"]
-        print(f"[{timestamp()}] SKIP  discovery cohort: reusing {len(ids)} IDs", flush=True)
-        return ids
+        payload = json.loads(ids_path.read_text())
+        if task.output_key in payload:
+            ids = payload[task.output_key]
+            print(
+                f"[{timestamp()}] SKIP  {task.output_key} discovery cohort: "
+                f"reusing {len(ids)} IDs",
+                flush=True,
+            )
+            return ids
+    else:
+        payload = {}
 
-    print(f"[{timestamp()}] START discovery cohort selection", flush=True)
+    print(
+        f"[{timestamp()}] START {task.output_key} discovery cohort selection",
+        flush=True,
+    )
     import torch
 
     from cci_diff.classifiers.celeba_resnet50 import load_celeba_resnet50
@@ -379,13 +450,18 @@ def select_discovery_ids(
     )
     selected, _ = select_eligible_samples(
         selection_args,
-        feature="smile",
+        feature=task.feature,
         classifier=classifier,
         detector=detector,
     )
     ids = [sample_id for sample_id, _, _ in selected]
-    ids_path.write_text(json.dumps({"smile": ids}, indent=2))
-    print(f"[{timestamp()}] DONE  discovery cohort selection: {len(ids)} IDs", flush=True)
+    payload[task.output_key] = ids
+    ids_path.write_text(json.dumps(payload, indent=2))
+    print(
+        f"[{timestamp()}] DONE  {task.output_key} discovery cohort selection: "
+        f"{len(ids)} IDs",
+        flush=True,
+    )
     return ids
 
 
@@ -498,14 +574,16 @@ def merge_discovery_shards(output_root: Path, jobs: Sequence[dict]) -> None:
 def run_discovery(args: argparse.Namespace, assets: dict[str, Path]) -> None:
     output_root = Path(args.output_dir or "/kaggle/working/cci_graph_discovery")
     output_root.mkdir(parents=True, exist_ok=True)
-    ids = select_discovery_ids(args, assets, output_root)
-    template = REPO_ROOT / "examples" / "graphs" / "remove_smile_clean_cci.json"
-    screening = output_root / "smile" / "screening"
-    interventions = output_root / "smile" / "interventions"
-    graph = output_root / "smile" / "graph"
+    task = resolve_discovery_task(args.task)
+    ids = select_discovery_ids(args, assets, output_root, task)
+    template = REPO_ROOT / task.template
+    paths = discovery_paths(output_root, task)
+    screening = paths["screening"]
+    interventions = paths["interventions"]
+    graph = paths["graph"]
 
     run_logged_command(
-        "smile discovery: Grad-CAM++ region screening",
+        f"{task.output_key} discovery: Grad-CAM++ region screening",
         [
             sys.executable,
             "-u",
@@ -517,15 +595,7 @@ def run_discovery(args: argparse.Namespace, assets: dict[str, Path]) -> None:
             "--sample_ids",
             *ids,
             "--candidate_regions",
-            "skin",
-            "nose",
-            "mouth",
-            "upper_lip",
-            "lower_lip",
-            "left_eye",
-            "right_eye",
-            "left_brow",
-            "right_brow",
+            *task.candidate_regions,
             "--max_selected_regions",
             "4",
             "--saliency_coverage_threshold",
@@ -560,13 +630,13 @@ def run_discovery(args: argparse.Namespace, assets: dict[str, Path]) -> None:
         template=template,
     )
     run_sharded_commands(
-        "smile discovery interventions",
+        f"{task.output_key} discovery interventions",
         jobs,
         manifest_path=interventions / "shard_manifest.json",
     )
     merge_discovery_shards(interventions, jobs)
     run_logged_command(
-        "smile discovery: freeze global graph",
+        f"{task.output_key} discovery: freeze global graph",
         [
             sys.executable,
             "-u",
@@ -595,6 +665,11 @@ def run_discovery(args: argparse.Namespace, assets: dict[str, Path]) -> None:
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--mode", choices=("discovery", "evaluation"), required=True)
+    parser.add_argument(
+        "--task",
+        choices=tuple(DISCOVERY_TASKS),
+        default="smile",
+    )
     parser.add_argument("--sample_count", type=int, default=300)
     parser.add_argument("--model_path", default=DEFAULT_MODEL)
     parser.add_argument("--classifier_path", default=None)
@@ -612,6 +687,15 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--num_inference_steps", type=int, default=35)
     parser.add_argument("--seed", type=int, default=42)
     return parser
+
+
+def validate_args(args: argparse.Namespace) -> None:
+    if args.sample_count <= 0:
+        raise ValueError("sample_count must be positive")
+    if args.max_workers < 0:
+        raise ValueError("max_workers must be non-negative")
+    if args.mode == "evaluation" and args.task != "smile":
+        raise ValueError("CCI evaluation is currently smile-only")
 
 
 def resolve_assets(args: argparse.Namespace) -> dict[str, Path]:
@@ -644,14 +728,11 @@ def resolve_assets(args: argparse.Namespace) -> dict[str, Path]:
 
 def main() -> int:
     args = build_parser().parse_args()
-    if args.sample_count <= 0:
-        raise ValueError("sample_count must be positive")
-    if args.max_workers < 0:
-        raise ValueError("max_workers must be non-negative")
+    validate_args(args)
     configure_runtime()
     print(
         f"[{timestamp()}] CONFIG mode={args.mode} samples={args.sample_count} "
-        f"model={args.model_path} device={args.device}",
+        f"task={args.task} model={args.model_path} device={args.device}",
         flush=True,
     )
     ensure_runtime_packages()
