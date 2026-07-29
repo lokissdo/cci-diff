@@ -240,7 +240,8 @@ and preservation-aware final-restoration budget:
 python scripts/run_clean_cci_pilot.py \
   --controller_modes fixed_trust_matched trust_region \
   --features smile \
-  --sample_count 10 \
+  --limit 10 \
+  --random_sample_seed 42 \
   --num_inference_steps 35 \
   --seed 42 \
   --cci_post_attack none

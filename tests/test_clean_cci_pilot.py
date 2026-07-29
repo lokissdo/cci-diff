@@ -220,6 +220,57 @@ class TestCleanCCIPilot(unittest.TestCase):
 
         self.assertEqual(args.sample_ids, [9, 3])
 
+    def test_random_sample_seed_shuffles_candidate_scan_deterministically(self):
+        import random
+
+        from scripts.run_clean_cci_pilot import select_eligible_samples
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            for sample_id in range(5):
+                Image.new("RGB", (4, 4), "black").save(
+                    root / f"{sample_id}.jpg"
+                )
+            mask = root / "mask.png"
+            Image.new("L", (4, 4), 255).save(mask)
+            args = SimpleNamespace(
+                sample_ids=None,
+                random_sample_seed=7,
+                max_image_id=5,
+                limit=2,
+                image_root=str(root),
+                mask_root=str(root),
+                classifier_input_size=512,
+                device="cpu",
+                excluded_ids_by_feature={},
+            )
+            expected = list(range(5))
+            random.Random(7).shuffle(expected)
+            with mock.patch(
+                "scripts.run_clean_cci_pilot.annotation_paths",
+                return_value={"mouth": mask, "u_lip": mask, "l_lip": mask},
+            ), mock.patch(
+                "scripts.run_sd2_bld_cci.score_classifier_image_grid",
+                return_value=[0.9],
+            ), mock.patch(
+                "scripts.run_sd2_bld_cci.load_rgb_image_tensor",
+                return_value=object(),
+            ), mock.patch(
+                "cci_diff.identity.facenet.detect_largest_face_box",
+                return_value=(0, 0, 4, 4),
+            ):
+                selected, _ = select_eligible_samples(
+                    args,
+                    feature="smile",
+                    classifier=object(),
+                    detector=object(),
+                )
+
+        self.assertEqual(
+            [sample[0] for sample in selected],
+            expected[:2],
+        )
+
     def test_explicit_sample_ids_limit_selection_to_sorted_shard(self):
         from scripts.run_clean_cci_pilot import select_eligible_samples
 

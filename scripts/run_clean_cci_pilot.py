@@ -7,6 +7,7 @@ import argparse
 import csv
 import json
 import math
+import random
 import statistics
 import subprocess
 import sys
@@ -786,11 +787,13 @@ def select_eligible_samples(
     config = FEATURES[feature]
     excluded = getattr(args, "excluded_ids_by_feature", {}).get(feature, set())
     explicit_ids = getattr(args, "sample_ids", None)
-    image_ids = (
-        sorted(int(image_id) for image_id in explicit_ids)
-        if explicit_ids is not None
-        else range(args.max_image_id)
-    )
+    if explicit_ids is not None:
+        image_ids = sorted(int(image_id) for image_id in explicit_ids)
+    else:
+        image_ids = list(range(args.max_image_id))
+        random_seed = getattr(args, "random_sample_seed", None)
+        if random_seed is not None:
+            random.Random(random_seed).shuffle(image_ids)
     required_count = len(image_ids) if explicit_ids is not None else args.limit
     selected = []
     decisions = []
@@ -870,6 +873,13 @@ def validate_pilot_args(args: argparse.Namespace) -> None:
         raise ValueError("mask candidates must be unique")
     if args.limit <= 0:
         raise ValueError("limit must be positive")
+    if (
+        getattr(args, "sample_ids", None) is not None
+        and getattr(args, "random_sample_seed", None) is not None
+    ):
+        raise ValueError(
+            "sample_ids and random_sample_seed are mutually exclusive"
+        )
     parse_epsilon_schedule(args.cci_post_attack_epsilon_schedule)
     if not 0 <= args.cci_post_attack_boundary_margin < 0.5:
         raise ValueError(
@@ -990,6 +1000,7 @@ def run_pilot(args: argparse.Namespace) -> dict[str, Any]:
             if variant in args.variants
         ],
         "excluded_ids_json": getattr(args, "exclude_ids_json", None),
+        "random_sample_seed": getattr(args, "random_sample_seed", None),
         "mask_dilations": args.mask_dilations,
         "mask_shapes": [asdict(candidate) for candidate in mask_candidates],
         "post_attack": {
@@ -1226,6 +1237,15 @@ def build_arg_parser() -> argparse.ArgumentParser:
         type=int,
         default=None,
         help="Evaluate exactly these preselected sample IDs.",
+    )
+    parser.add_argument(
+        "--random_sample_seed",
+        type=int,
+        default=None,
+        help=(
+            "Shuffle the candidate ID scan deterministically before selecting "
+            "the requested number of eligible samples."
+        ),
     )
     parser.add_argument(
         "--variants",
