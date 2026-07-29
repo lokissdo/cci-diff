@@ -6,12 +6,26 @@ import pytest
 from scripts.evaluate_clean_cci_ace import (
     bootstrap_mean_interval,
     collateral_flips,
+    continuous_non_target_drift,
     correlation_difference,
     directional_target_metrics,
     group_variant_task_rows,
     paired_cosine_similarity,
     summarize_task_rows,
 )
+
+
+def test_continuous_non_target_drift_excludes_each_target():
+    source = np.array([[0.1, 0.2, 0.3], [0.4, 0.5, 0.6]])
+    output = np.array([[0.2, 0.9, 0.5], [0.1, 0.7, 0.9]])
+
+    values = continuous_non_target_drift(
+        source,
+        output,
+        np.array([1, 0]),
+    )
+
+    assert values == pytest.approx([0.15, 0.25])
 
 
 def test_directional_success_handles_desired_zero_and_one():
@@ -86,6 +100,7 @@ def test_task_summary_reports_unconditional_and_success_conditioned_metrics():
             "fva_cosine": 0.8,
             "fs_cosine": 0.7,
             "mnac": 1.0,
+            "independent_non_target_drift": 0.1,
             "changed_fraction_5": 0.1,
         },
         {
@@ -94,6 +109,7 @@ def test_task_summary_reports_unconditional_and_success_conditioned_metrics():
             "fva_cosine": 0.2,
             "fs_cosine": 0.3,
             "mnac": 3.0,
+            "independent_non_target_drift": 0.3,
             "changed_fraction_5": 0.5,
         },
     ]
@@ -104,6 +120,9 @@ def test_task_summary_reports_unconditional_and_success_conditioned_metrics():
     assert summary["target_success_count"] == 1
     assert summary["fr"] == pytest.approx(0.5)
     assert summary["unconditional"]["fva_cosine"]["mean"] == pytest.approx(0.5)
+    assert summary["unconditional"]["independent_non_target_drift"][
+        "mean"
+    ] == pytest.approx(0.2)
     assert summary["target_success_conditioned"]["fva_cosine"]["mean"] == 0.8
 
 

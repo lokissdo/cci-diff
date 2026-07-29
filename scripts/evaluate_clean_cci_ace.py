@@ -22,6 +22,7 @@ TARGETS = {
 }
 SUMMARY_FIELDS = (
     "desired_probability",
+    "independent_non_target_drift",
     "fva_cosine",
     "fs_cosine",
     "mnac",
@@ -33,6 +34,29 @@ SUMMARY_FIELDS = (
     "inside_semantic_l1",
     "outside_semantic_l1",
 )
+
+
+def continuous_non_target_drift(
+    source_probabilities: np.ndarray,
+    output_probabilities: np.ndarray,
+    target_indices: np.ndarray,
+) -> np.ndarray:
+    """Mean absolute independent-oracle drift, excluding each row's target."""
+
+    source = np.asarray(source_probabilities, dtype=float)
+    output = np.asarray(output_probabilities, dtype=float)
+    targets = np.asarray(target_indices, dtype=int)
+    if source.shape != output.shape or source.ndim != 2:
+        raise ValueError(
+            "probability arrays must be aligned and two-dimensional"
+        )
+    if len(targets) != len(source):
+        raise ValueError("one target index is required per row")
+    if np.any(targets < 0) or np.any(targets >= source.shape[1]):
+        raise ValueError("target indices must identify probability columns")
+    absolute = np.abs(output - source)
+    absolute[np.arange(len(absolute)), targets] = np.nan
+    return np.nanmean(absolute, axis=1)
 
 
 def directional_target_metrics(
@@ -482,6 +506,11 @@ def evaluate(args: argparse.Namespace) -> dict[str, Any]:
         desired_values,
     )
     mnac = collateral_flips(source_probs >= 0.5, output_probs >= 0.5, target_indices)
+    independent_drift = continuous_non_target_drift(
+        source_probs,
+        output_probs,
+        target_indices,
+    )
     _release_model(oracle, args.device)
 
     vggface = _load_vggface(ace_root, args.device)
@@ -515,6 +544,9 @@ def evaluate(args: argparse.Namespace) -> dict[str, Any]:
                 "target_success": bool(target["target_success"][index]),
                 "directional_flip": bool(target["directional_flip"][index]),
                 "mnac": int(mnac[index]),
+                "independent_non_target_drift": float(
+                    independent_drift[index]
+                ),
                 "fva_cosine": float(fva[index]),
                 "fs_cosine": float(fs[index]),
             }
@@ -551,6 +583,9 @@ def evaluate(args: argparse.Namespace) -> dict[str, Any]:
                     "fva_rate": summary["fva_rate"],
                     "fs": summary["unconditional"]["fs_cosine"]["mean"],
                     "mnac": summary["unconditional"]["mnac"]["mean"],
+                    "independent_non_target_drift": summary["unconditional"][
+                        "independent_non_target_drift"
+                    ]["mean"],
                     "cd": summary["cd"],
                     "desired_probability": summary["unconditional"][
                         "desired_probability"
