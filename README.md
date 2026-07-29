@@ -230,6 +230,35 @@ require Notebook 1 output. Experiment scripts run inline through `runpy`, with
 unbuffered timestamped progress printed in the active notebook cell. Git clone
 and dependency installation remain external setup commands.
 
+### Compare Matched Fixed and Adaptive Trust-Region CCI
+
+Run the clean-coordinate fixed comparator and lexicographic adaptive optimizer
+with identical samples, masks, seeds, diffusion settings, trust-radius budget,
+and preservation-aware final-restoration budget:
+
+```bash
+python scripts/run_clean_cci_pilot.py \
+  --controller_modes fixed_trust_matched trust_region \
+  --features smile \
+  --sample_count 10 \
+  --num_inference_steps 35 \
+  --seed 42 \
+  --cci_post_attack none
+```
+
+`A10` is the matched clean-coordinate fixed comparator and `A11` is the
+adaptive lexicographic trust-region optimizer. The archived `A2` fixed-equal
+and `A3` primal-dual feedback definitions are unchanged. A10/A11 do not use
+the archived target-only final correction; they share preservation-aware final
+restoration instead.
+
+Use `scripts/evaluate_clean_cci_ace.py` to report independent ACE
+`independent_non_target_drift`, the primary continuous preservation metric,
+alongside MNAC. For a calibrated effort sweep, use
+`scripts/evaluate_matched_success.py` to freeze the common target-success grid
+on calibration data and compute paired identity-cluster bootstrap intervals on
+held-out rows.
+
 ### Launch Kaggle Remotely
 
 Authenticate the official Kaggle CLI once, then run:

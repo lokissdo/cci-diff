@@ -31,6 +31,19 @@
     "gradient_floor": 0.00001,
     "active_progress": [0.15, 0.90],
     "every_n_steps": 2,
-    "final_corrections": 12
+    "final_corrections": 12,
+    "trust_region": {
+      "initial_radius": 0.15,
+      "minimum_radius": 0.01,
+      "maximum_radius": 0.30,
+      "target_progress_fraction": 0.5,
+      "feasibility_tolerance": 0.0001,
+      "reliability_alpha_min": 0.10,
+      "huber_delta": 0.02,
+      "support_floor": 0.05,
+      "maximum_blend_compensation": 4.0,
+      "final_cumulative_radius": 0.60,
+      "final_iterations": 12
+    }
   }
 }
