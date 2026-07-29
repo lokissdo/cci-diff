@@ -32,7 +32,7 @@ def assert_standalone_command_contract(source: str, *, mode: str) -> None:
     assert "*asset_args" in source
 
 
-def test_global_discovery_notebook_is_two_task_resumable_and_max_four():
+def test_global_discovery_notebook_runs_blond_hair_only_and_max_four():
     source = notebook_source("01_global_graph_discovery.ipynb")
 
     assert_standalone_command_contract(source, mode="discovery")
@@ -41,10 +41,13 @@ def test_global_discovery_notebook_is_two_task_resumable_and_max_four():
     assert "GIT_REF = 'main'" in source
     assert "'git', 'clone'" in source
     assert "/kaggle/input/cci-sd2-assets" not in source
-    assert "SAMPLE_COUNT = 300" in source
+    assert "SAMPLE_COUNT = 100" in source
     assert "MAX_SELECTED_REGIONS = 4" in source
     assert "STOP_FLIP_RATE = 0.96" in source
-    assert "'smile'" in source
+    assert "TASK = 'blond_hair'" in source
+    assert "'--task', TASK" in source
+    assert "OUTPUT_ROOT / TASK / 'graph'" in source
+    assert "standalone {TASK} discovery" in source
     assert "'hair': {" not in source
     assert "PYTHONUNBUFFERED" in source
     assert "cuda" in source
