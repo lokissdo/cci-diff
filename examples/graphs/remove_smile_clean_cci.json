@@ -14,12 +14,12 @@
     {"id": "smiling", "role": "target", "evaluator": "celeba_attribute", "attribute": "Smiling"},
     {"id": "identity", "role": "constraint", "evaluator": "facenet_identity", "tolerance": 0.08},
     {"id": "outside_locality", "role": "constraint", "evaluator": "outside_l1", "tolerance": 0.02},
-    {"id": "residual_tv", "role": "constraint", "evaluator": "masked_residual_tv", "tolerance": 0.015}
+    {"id": "residual_tv", "role": "audit_only", "evaluator": "masked_residual_tv"}
   ],
   "edges": [
     {"source": "smiling", "target": "identity", "relation": "must_preserve"},
     {"source": "smiling", "target": "outside_locality", "relation": "must_preserve"},
-    {"source": "smiling", "target": "residual_tv", "relation": "must_preserve"}
+    {"source": "smiling", "target": "residual_tv", "relation": "measured_by"}
   ],
   "controller": {
     "dual_rate": 0.2,

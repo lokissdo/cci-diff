@@ -84,7 +84,7 @@ def default_concept_registry() -> ConceptRegistry:
         "masked_residual_tv": EvaluatorRegistration(
             "masked_residual_tv",
             "masked-residual-tv-v1",
-            frozenset({"constraint"}),
+            frozenset({"constraint", "audit_only"}),
             True,
         ),
         "clip_image_audit": EvaluatorRegistration(

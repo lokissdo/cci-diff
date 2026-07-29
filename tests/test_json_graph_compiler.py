@@ -65,6 +65,17 @@ class TestJsonGraphCompiler(unittest.TestCase):
         )
         self.assertEqual(registration.version, "celeba-resnet50-v1")
         self.assertEqual(index, 31)
+        registration, index = registry.resolve_node(
+            ConceptNode(
+                "residual_tv",
+                "audit_only",
+                "masked_residual_tv",
+                None,
+                None,
+            )
+        )
+        self.assertEqual(registration.version, "masked-residual-tv-v1")
+        self.assertIsNone(index)
 
         with self.assertRaisesRegex(ValueError, "Unknown evaluator"):
             registry.resolve_node(

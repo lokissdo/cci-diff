@@ -392,9 +392,9 @@ class TestCleanCCICLI(unittest.TestCase):
             [
                 "FaceNetIdentityConstraint",
                 "OutsideL1Constraint",
-                "MaskedResidualTVConstraint",
             ],
         )
+        self.assertEqual([node.id for node in plan.audit_only], ["residual_tv"])
 
     def test_robust_mask_components_accept_one_or_more_and_reject_zero(self):
         from scripts.run_sd2_bld_cci import validate_robust_mask_components
