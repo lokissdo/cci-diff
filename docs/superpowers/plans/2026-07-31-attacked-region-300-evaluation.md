@@ -143,9 +143,9 @@ git commit -m "feat: parameterize attacked pilot regions"
 Add tests for:
 
 ```python
-curves = np.array([[0.9, 0.5, 0.1]])
+curves = np.array([[0.9, 0.1, 0.1]])
 scores = binary_cout_from_smile_curves(curves)
-assert scores == pytest.approx([0.8])
+assert scores == pytest.approx([0.4])
 ```
 
 The expected value follows:
