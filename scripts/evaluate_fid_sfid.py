@@ -25,6 +25,7 @@ FULL_METRIC_FIELDS = (
     "fs",
     "mnac",
     "cd",
+    "cout",
     "changed_fraction_5",
     "outside_semantic_fraction_5",
     "outside_generation_fraction_5",
@@ -44,15 +45,20 @@ def load_experiment_rows(
     *,
     expected_count: int = 100,
     variant: str | None = None,
+    tasks: Sequence[str] = ("smile", "hair"),
 ) -> dict[str, list[dict[str, Any]]]:
-    """Load a unique, complete smile/hair cohort, optionally for one variant."""
+    """Load unique, complete task cohorts, optionally for one variant."""
 
     table = Path(root) / "ace_pair_metrics.csv"
     if not table.is_file():
         raise FileNotFoundError(f"missing experiment table: {table}")
     with table.open(newline="", encoding="utf-8") as handle:
         raw_rows = list(csv.DictReader(handle))
-    grouped: dict[str, list[dict[str, Any]]] = {"smile": [], "hair": []}
+    if not tasks or len(tasks) != len(set(tasks)):
+        raise ValueError("tasks must contain unique task names")
+    grouped: dict[str, list[dict[str, Any]]] = {
+        task: [] for task in tasks
+    }
     seen: set[tuple[str, int]] = set()
     for row in raw_rows:
         if variant is not None and row.get("variant") != variant:
@@ -244,6 +250,7 @@ def summarize_pair_rows(
         "fva_cosine": _mean(ace_rows, "fva_cosine"),
         "fs": _mean(ace_rows, "fs_cosine"),
         "mnac": _mean(ace_rows, "mnac"),
+        "cout": _mean(ace_rows, "cout"),
         "changed_fraction_5": _mean(ace_rows, "changed_fraction_5"),
         "outside_semantic_fraction_5": _mean(ace_rows, "outside_semantic_fraction_5"),
         "outside_generation_fraction_5": _mean(ace_rows, "outside_generation_fraction_5"),
@@ -288,7 +295,7 @@ def write_reports(
     fid_lines = [
         "# Deterministic FID and sFID",
         "",
-        "These 100-image estimates are exploratory and are not directly comparable to paper values computed with a different sample count or split.",
+        "These finite-sample estimates are exploratory and are not directly comparable to paper values computed with a different sample count or split.",
         "",
         "| Method | Steps | Task | N | FID down | sFID down | sFID 1 | sFID 2 |",
         "|---|---:|---|---:|---:|---:|---:|---:|",
@@ -306,7 +313,7 @@ def write_reports(
     lines = [
         "# Full Counterfactual Metrics",
         "",
-        "FID and sFID use 100 images per task and are exploratory. Target accuracy and directional FR are intentionally separate.",
+        "FID and sFID use the reported N per task and are exploratory. Target accuracy and directional FR are intentionally separate.",
         "",
         "## Counterfactual Success",
         "",
@@ -327,15 +334,16 @@ def write_reports(
             "",
             "## Preservation and Collateral Change",
             "",
-            "| Method | Steps | Task | FVA | FVA cosine | FS | MNAC | CD |",
-            "|---|---:|---|---:|---:|---:|---:|---:|",
+            "| Method | Steps | Task | FVA | FVA cosine | FS | MNAC | CD | COUT |",
+            "|---|---:|---|---:|---:|---:|---:|---:|---:|",
         ]
     )
     for row in full_rows:
         lines.append(
             f"| {row['method']} | {row['steps']} | {row['task']} | {_percent(row['fva_rate'])} | "
             f"{float(row['fva_cosine']):.4f} | {float(row['fs']):.4f} | "
-            f"{float(row['mnac']):.4f} | {float(row['cd']):.4f} |"
+            f"{float(row['mnac']):.4f} | {float(row['cd']):.4f} | "
+            f"{float(row['cout']):.4f} |"
         )
     lines.extend(
         [
@@ -347,6 +355,8 @@ def write_reports(
         ]
     )
     for row in full_rows:
+        runtime = row["median_runtime_seconds"]
+        runtime_text = "-" if runtime is None else f"{float(runtime):.2f}"
         lines.append(
             f"| {row['method']} | {row['steps']} | {row['task']} | {float(row['fid']):.4f} | "
             f"{float(row['sfid']):.4f} | {_percent(row['changed_fraction_5'])} | "
@@ -380,11 +390,15 @@ def evaluate(args: argparse.Namespace) -> dict[str, Any]:
         configurations
     ):
         raise ValueError("at least two unique method/step experiments are required")
+    tasks = tuple(args.tasks)
+    if not tasks or len(tasks) != len(set(tasks)):
+        raise ValueError("tasks must contain unique task names")
     experiments = {
         f"{method}_{steps}": load_experiment_rows(
             root,
             expected_count=args.expected_count,
             variant=method.upper() if method.upper().startswith("A") else None,
+            tasks=tasks,
         )
         for method, steps, root in configurations
     }
@@ -408,7 +422,7 @@ def evaluate(args: argparse.Namespace) -> dict[str, Any]:
 
     first_grouped = next(iter(experiments.values()))
     source_activations = {}
-    for task in ("smile", "hair"):
+    for task in tasks:
         source_activations[task] = extract_or_load_activations(
             [row["source_path"] for row in first_grouped[task]],
             cache_dir / f"source_{task}.npz",
@@ -430,12 +444,12 @@ def evaluate(args: argparse.Namespace) -> dict[str, Any]:
                 [row for row in pilot_rows if row["feature"] == task],
                 key=lambda row: int(float(row["sample_id"])),
             )
-            for task in ("smile", "hair")
+            for task in tasks
         }
         ace_payload = json.loads((root / "ace_metrics.json").read_text(encoding="utf-8"))
         pilot_summary = json.loads((root / "pilot_summary.json").read_text(encoding="utf-8"))
         variant = requested_variant or ("A0" if method.upper() == "BLD" else "A3")
-        for task in ("smile", "hair"):
+        for task in tasks:
             output_activations = extract_or_load_activations(
                 [row["output_path"] for row in grouped[task]],
                 cache_dir / f"output_{method.lower()}_{steps}_{task}.npz",
@@ -505,6 +519,11 @@ def build_arg_parser() -> argparse.ArgumentParser:
     parser.add_argument("--dims", type=int, default=2048, choices=(64, 192, 768, 2048))
     parser.add_argument("--device", default="cpu")
     parser.add_argument("--expected-count", type=int, default=100)
+    parser.add_argument(
+        "--tasks",
+        nargs="+",
+        default=["smile", "hair"],
+    )
     return parser
 
 

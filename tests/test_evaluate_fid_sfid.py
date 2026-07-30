@@ -57,11 +57,17 @@ def test_fid_rejects_misaligned_or_nonfinite_activations():
 
 
 def _write_experiment(
-    root, *, count=100, duplicate=False, id_offset=0, variants=()
+    root,
+    *,
+    count=100,
+    duplicate=False,
+    id_offset=0,
+    variants=(),
+    tasks=("smile", "hair"),
 ):
     root.mkdir()
     rows = []
-    for feature in ("smile", "hair"):
+    for feature in tasks:
         for index in range(count):
             sample_id = id_offset + index
             source = root / f"{feature}_{sample_id}_source.png"
@@ -113,6 +119,43 @@ def test_load_experiment_rows_filters_variant_and_accepts_pilot_count(tmp_path):
     assert {row["variant"] for row in grouped["smile"]} == {"A4"}
 
 
+def test_load_experiment_rows_accepts_smile_only_300_cohort(tmp_path):
+    root = tmp_path / "smile_only"
+    _write_experiment(root, count=300, tasks=("smile",))
+
+    grouped = load_experiment_rows(
+        root,
+        expected_count=300,
+        tasks=("smile",),
+    )
+
+    assert set(grouped) == {"smile"}
+    assert len(grouped["smile"]) == 300
+
+
+def test_parser_accepts_smile_only_task():
+    from scripts.evaluate_fid_sfid import build_arg_parser
+
+    args = build_arg_parser().parse_args(
+        [
+            "--experiment",
+            "A0",
+            "35",
+            "outputs/test",
+            "--experiment",
+            "A11",
+            "35",
+            "outputs/test",
+            "--output-dir",
+            "outputs/metrics",
+            "--tasks",
+            "smile",
+        ]
+    )
+
+    assert args.tasks == ["smile"]
+
+
 def test_validate_aligned_cohorts_rejects_different_ids(tmp_path):
     first = tmp_path / "first"
     second = tmp_path / "second"
@@ -154,6 +197,7 @@ def test_summarize_pair_rows_separates_accuracy_and_directional_fr():
             "fva_cosine": "0.9",
             "fs_cosine": "0.8",
             "mnac": "2",
+            "cout": "0.1",
             "changed_fraction_5": "0.3",
             "outside_semantic_fraction_5": "0.2",
             "outside_generation_fraction_5": "0.1",
@@ -167,6 +211,7 @@ def test_summarize_pair_rows_separates_accuracy_and_directional_fr():
             "fva_cosine": "0.95",
             "fs_cosine": "0.85",
             "mnac": "1",
+            "cout": "0.3",
             "changed_fraction_5": "0.4",
             "outside_semantic_fraction_5": "0.25",
             "outside_generation_fraction_5": "0.15",
@@ -183,6 +228,7 @@ def test_summarize_pair_rows_separates_accuracy_and_directional_fr():
     assert result["same_classifier_fr_05"] == 1.0
     assert result["strong_target_rate_08"] == 0.5
     assert result["desired_probability"] == pytest.approx(0.8)
+    assert result["cout"] == pytest.approx(0.2)
 
 
 def test_runtime_summary_value_preserves_missing_legacy_runtime():
@@ -231,6 +277,7 @@ def test_write_reports_contains_all_eight_rows_and_full_columns(tmp_path):
                         "fs": 0.8,
                         "mnac": 1.0,
                         "cd": 2.0,
+                        "cout": 0.25,
                         "changed_fraction_5": 0.2,
                         "outside_semantic_fraction_5": 0.1,
                         "outside_generation_fraction_5": 0.1,
@@ -247,8 +294,11 @@ def test_write_reports_contains_all_eight_rows_and_full_columns(tmp_path):
     assert len(rows) == 8
     assert "directional_fr" in rows[0]
     assert "target_accuracy" in rows[0]
+    assert "cout" in rows[0]
     assert (tmp_path / "fid_sfid_metrics.json").is_file()
-    assert "exploratory" in (tmp_path / "full_metrics.md").read_text().lower()
+    report = (tmp_path / "full_metrics.md").read_text().lower()
+    assert "exploratory" in report
+    assert "cout" in report
 
 
 def test_write_reports_formats_missing_runtime_as_dash(tmp_path):
@@ -271,6 +321,7 @@ def test_write_reports_formats_missing_runtime_as_dash(tmp_path):
         "fs": 0.8,
         "mnac": 1.0,
         "cd": 2.0,
+        "cout": 0.25,
         "changed_fraction_5": 0.2,
         "outside_semantic_fraction_5": 0.1,
         "outside_generation_fraction_5": 0.1,
