@@ -220,6 +220,154 @@ class TestCleanCCIPilot(unittest.TestCase):
 
         self.assertEqual(args.sample_ids, [9, 3])
 
+    def test_parser_accepts_canonical_smile_region_components(self):
+        from scripts.run_clean_cci_pilot import (
+            build_arg_parser,
+            resolve_region_components,
+        )
+
+        args = build_arg_parser().parse_args(
+            [
+                "--features",
+                "smile",
+                "--classifier_path",
+                "classifier.pth",
+                "--identity_model_path",
+                "identity.pt",
+                "--output_dir",
+                "outputs/test",
+                "--region_components",
+                "mouth",
+                "upper_lip",
+                "lower_lip",
+            ]
+        )
+
+        self.assertEqual(
+            args.region_components,
+            ["mouth", "upper_lip", "lower_lip"],
+        )
+        self.assertEqual(
+            resolve_region_components(["mouth"]),
+            (("mouth",), {"mouth": "mouth"}),
+        )
+
+    def test_region_graph_override_does_not_modify_source_graph(self):
+        from scripts.run_clean_cci_pilot import write_region_graph
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            source = root / "source.json"
+            destination = root / "generated" / "mouth.json"
+            payload = {
+                "version": 1,
+                "region": {
+                    "audit_role": "mouth",
+                    "components": ["mouth", "upper_lip", "lower_lip"],
+                },
+            }
+            source.write_text(json.dumps(payload), encoding="utf-8")
+
+            result = write_region_graph(
+                source,
+                destination,
+                ("mouth",),
+            )
+
+            self.assertEqual(result, destination)
+            self.assertEqual(
+                json.loads(destination.read_text())["region"]["components"],
+                ["mouth"],
+            )
+            self.assertEqual(
+                json.loads(source.read_text())["region"]["components"],
+                ["mouth", "upper_lip", "lower_lip"],
+            )
+
+    def test_sample_ids_manifest_loads_unique_feature_cohort(self):
+        from scripts.run_clean_cci_pilot import load_sample_ids_manifest
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            path = Path(tmpdir) / "pilot_manifest.json"
+            path.write_text(
+                json.dumps(
+                    {
+                        "features": {
+                            "smile": {"selected_ids": [9, 3, 7]},
+                        }
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+            self.assertEqual(
+                load_sample_ids_manifest(path, "smile"),
+                [9, 3, 7],
+            )
+
+            path.write_text(
+                json.dumps(
+                    {
+                        "features": {
+                            "smile": {"selected_ids": [9, 9]},
+                        }
+                    }
+                ),
+                encoding="utf-8",
+            )
+            with self.assertRaisesRegex(ValueError, "unique"):
+                load_sample_ids_manifest(path, "smile")
+
+    def test_sampling_sources_are_mutually_exclusive(self):
+        from scripts.run_clean_cci_pilot import (
+            build_arg_parser,
+            validate_pilot_args,
+        )
+
+        args = build_arg_parser().parse_args(
+            [
+                "--features",
+                "smile",
+                "--classifier_path",
+                "classifier.pth",
+                "--identity_model_path",
+                "identity.pt",
+                "--output_dir",
+                "outputs/test",
+                "--random_sample_seed",
+                "42",
+                "--sample_ids_manifest",
+                "prior.json",
+            ]
+        )
+
+        with self.assertRaisesRegex(ValueError, "mutually exclusive"):
+            validate_pilot_args(args)
+
+    def test_region_override_rejects_non_smile_feature(self):
+        from scripts.run_clean_cci_pilot import (
+            build_arg_parser,
+            validate_pilot_args,
+        )
+
+        args = build_arg_parser().parse_args(
+            [
+                "--features",
+                "hair",
+                "--classifier_path",
+                "classifier.pth",
+                "--identity_model_path",
+                "identity.pt",
+                "--output_dir",
+                "outputs/test",
+                "--region_components",
+                "mouth",
+            ]
+        )
+
+        with self.assertRaisesRegex(ValueError, "smile"):
+            validate_pilot_args(args)
+
     def test_random_sample_seed_shuffles_candidate_scan_deterministically(self):
         import random
 
@@ -315,7 +463,7 @@ class TestCleanCCIPilot(unittest.TestCase):
         self.assertEqual([sample[0] for sample in selected], [3, 9])
         self.assertEqual([decision["image_id"] for decision in decisions], [3, 9])
 
-    def test_clean_variant_forwards_adaptive_post_attack(self):
+    def test_raw_and_adaptive_variants_forward_post_attack(self):
         from scripts.run_clean_cci_pilot import (
             build_arg_parser,
             build_variant_command,
@@ -332,7 +480,8 @@ class TestCleanCCIPilot(unittest.TestCase):
                 "--output_dir",
                 "outputs/test",
                 "--variants",
-                "A3",
+                "A0",
+                "A11",
                 "--cci_post_attack",
                 "smooth_boundary",
                 "--cci_post_attack_epsilon_schedule",
@@ -342,30 +491,36 @@ class TestCleanCCIPilot(unittest.TestCase):
             ]
         )
 
-        command = build_variant_command(
-            args,
-            feature="smile",
-            variant="A3",
-            sample_id=0,
-            source=Path("source.jpg"),
-            masks={
-                "mouth": Path("mouth.png"),
-                "u_lip": Path("u_lip.png"),
-                "l_lip": Path("l_lip.png"),
-            },
-            binding_path=Path("binding.json"),
-            output_path=Path("candidate"),
-        )
+        for variant in ("A0", "A11"):
+            with self.subTest(variant=variant):
+                command = build_variant_command(
+                    args,
+                    feature="smile",
+                    variant=variant,
+                    sample_id=0,
+                    source=Path("source.jpg"),
+                    masks={
+                        "mouth": Path("mouth.png"),
+                        "u_lip": Path("u_lip.png"),
+                        "l_lip": Path("l_lip.png"),
+                    },
+                    binding_path=Path("binding.json"),
+                    output_path=Path("candidate"),
+                )
 
-        index = command.index("--cci_post_attack")
-        self.assertEqual(command[index + 1], "smooth_boundary")
-        schedule_index = command.index("--cci_post_attack_epsilon_schedule")
-        self.assertEqual(
-            command[schedule_index + 1],
-            "0.05,0.08,0.10,0.30,0.50",
-        )
-        margin_index = command.index("--cci_post_attack_boundary_margin")
-        self.assertEqual(command[margin_index + 1], "0.03")
+                index = command.index("--cci_post_attack")
+                self.assertEqual(command[index + 1], "smooth_boundary")
+                schedule_index = command.index(
+                    "--cci_post_attack_epsilon_schedule"
+                )
+                self.assertEqual(
+                    command[schedule_index + 1],
+                    "0.05,0.08,0.10,0.30,0.50",
+                )
+                margin_index = command.index(
+                    "--cci_post_attack_boundary_margin"
+                )
+                self.assertEqual(command[margin_index + 1], "0.03")
 
     def test_candidate_row_scores_corrected_post_attack_artifact(self):
         from scripts.run_clean_cci_pilot import MaskCandidate, _candidate_row

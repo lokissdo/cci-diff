@@ -134,6 +134,12 @@ FEATURES = {
     },
 }
 
+SMILE_REGION_COMPONENTS = {
+    "mouth": "mouth",
+    "upper_lip": "u_lip",
+    "lower_lip": "l_lip",
+}
+
 
 @dataclass(frozen=True)
 class MaskCandidate:
@@ -409,6 +415,78 @@ def write_binding(
     path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
 
 
+def resolve_region_components(
+    values: list[str] | tuple[str, ...] | None,
+) -> tuple[tuple[str, ...], dict[str, str]]:
+    """Resolve canonical smile-region names to annotation component names."""
+
+    canonical = tuple(values or SMILE_REGION_COMPONENTS)
+    if not canonical:
+        raise ValueError("region_components must contain at least one component")
+    if len(canonical) != len(set(canonical)):
+        raise ValueError("region_components must be unique")
+    unknown = [
+        component
+        for component in canonical
+        if component not in SMILE_REGION_COMPONENTS
+    ]
+    if unknown:
+        raise ValueError(
+            "Unknown smile region components: " + ", ".join(unknown)
+        )
+    return canonical, {
+        component: SMILE_REGION_COMPONENTS[component]
+        for component in canonical
+    }
+
+
+def write_region_graph(
+    source_path: str | Path,
+    destination: str | Path,
+    components: tuple[str, ...],
+) -> Path:
+    """Write an immutable per-run graph with the requested region union."""
+
+    source_path = Path(source_path)
+    destination = Path(destination)
+    payload = json.loads(source_path.read_text(encoding="utf-8"))
+    if not isinstance(payload.get("region"), dict):
+        raise ValueError(f"Graph has no region object: {source_path}")
+    payload["region"]["components"] = list(components)
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    destination.write_text(
+        json.dumps(payload, indent=2, allow_nan=False) + "\n",
+        encoding="utf-8",
+    )
+    return destination
+
+
+def load_sample_ids_manifest(
+    path: str | Path,
+    feature: str,
+) -> list[int]:
+    """Load one exact feature cohort from an earlier pilot manifest."""
+
+    path = Path(path)
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    try:
+        raw_ids = payload["features"][feature]["selected_ids"]
+    except (KeyError, TypeError) as error:
+        raise ValueError(
+            f"Manifest does not contain selected IDs for {feature!r}: {path}"
+        ) from error
+    if not isinstance(raw_ids, list) or not raw_ids:
+        raise ValueError(
+            f"Manifest selected IDs for {feature!r} must be a non-empty list"
+        )
+    image_ids = [int(value) for value in raw_ids]
+    if len(image_ids) != len(set(image_ids)):
+        raise ValueError(
+            f"Manifest selected IDs for {feature!r} must be unique"
+        )
+    return image_ids
+
+
 def _prompt_for_graph(path: str) -> str:
     from cci_diff.concept_graph import load_concept_graph
     from cci_diff.prompts import build_concept_prompt
@@ -445,8 +523,10 @@ def build_variant_command(
     output_path: Path,
     dilation: int = 0,
     mask_candidate: MaskCandidate | None = None,
+    graph_path: str | Path | None = None,
 ) -> list[str]:
     config = FEATURES[feature]
+    graph_path = str(graph_path or config["graph"])
     candidate = mask_candidate or MaskCandidate(f"d{dilation}", dilation)
     common = [
         getattr(args, "python_executable", ".venv-ml/bin/python"),
@@ -454,7 +534,7 @@ def build_variant_command(
         "--output_dir",
         str(output_path),
         "--prompt",
-        _prompt_for_graph(config["graph"]),
+        _prompt_for_graph(graph_path),
         "--model_path",
         args.model_path,
         "--local_files_only",
@@ -503,7 +583,7 @@ def build_variant_command(
                 "--cci_hook",
                 "clean_constraint",
                 "--cci_graph",
-                config["graph"],
+                graph_path,
                 "--cci_sample_bindings",
                 str(binding_path),
                 "--classifier_path",
@@ -787,6 +867,9 @@ def select_eligible_samples(
     config = FEATURES[feature]
     excluded = getattr(args, "excluded_ids_by_feature", {}).get(feature, set())
     explicit_ids = getattr(args, "sample_ids", None)
+    manifest_path = getattr(args, "sample_ids_manifest", None)
+    if explicit_ids is None and manifest_path is not None:
+        explicit_ids = load_sample_ids_manifest(manifest_path, feature)
     if explicit_ids is not None:
         image_ids = sorted(int(image_id) for image_id in explicit_ids)
     else:
@@ -873,13 +956,22 @@ def validate_pilot_args(args: argparse.Namespace) -> None:
         raise ValueError("mask candidates must be unique")
     if args.limit <= 0:
         raise ValueError("limit must be positive")
-    if (
-        getattr(args, "sample_ids", None) is not None
-        and getattr(args, "random_sample_seed", None) is not None
-    ):
+    sampling_sources = [
+        getattr(args, "sample_ids", None) is not None,
+        getattr(args, "random_sample_seed", None) is not None,
+        getattr(args, "sample_ids_manifest", None) is not None,
+    ]
+    if sum(sampling_sources) > 1:
         raise ValueError(
-            "sample_ids and random_sample_seed are mutually exclusive"
+            "sample_ids, random_sample_seed, and sample_ids_manifest are "
+            "mutually exclusive"
         )
+    if getattr(args, "region_components", None) is not None:
+        if set(args.features) != {"smile"}:
+            raise ValueError(
+                "region_components override is supported only for smile"
+            )
+        resolve_region_components(args.region_components)
     parse_epsilon_schedule(args.cci_post_attack_epsilon_schedule)
     if not 0 <= args.cci_post_attack_boundary_margin < 0.5:
         raise ValueError(
@@ -981,6 +1073,24 @@ def run_pilot(args: argparse.Namespace) -> dict[str, Any]:
     mask_candidates = resolve_mask_candidates(args)
     output_dir = Path(args.output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
+    graph_paths = {
+        feature: Path(FEATURES[feature]["graph"])
+        for feature in args.features
+    }
+    resolved_region = None
+    if getattr(args, "region_components", None) is not None:
+        canonical, annotation = resolve_region_components(
+            args.region_components
+        )
+        graph_paths["smile"] = write_region_graph(
+            FEATURES["smile"]["graph"],
+            output_dir / "config" / "remove_smile_region_graph.json",
+            canonical,
+        )
+        resolved_region = {
+            "canonical_components": list(canonical),
+            "annotation_components": list(annotation.values()),
+        }
     classifier = load_celeba_resnet50(
         args.classifier_path,
         device=args.device,
@@ -1001,6 +1111,12 @@ def run_pilot(args: argparse.Namespace) -> dict[str, Any]:
         ],
         "excluded_ids_json": getattr(args, "exclude_ids_json", None),
         "random_sample_seed": getattr(args, "random_sample_seed", None),
+        "sample_ids_manifest": getattr(args, "sample_ids_manifest", None),
+        "region": resolved_region,
+        "graph_paths": {
+            feature: str(path)
+            for feature, path in graph_paths.items()
+        },
         "mask_dilations": args.mask_dilations,
         "mask_shapes": [asdict(candidate) for candidate in mask_candidates],
         "post_attack": {
@@ -1085,6 +1201,7 @@ def run_pilot(args: argparse.Namespace) -> dict[str, Any]:
                         binding_path=binding_path,
                         output_path=run_dir,
                         mask_candidate=candidate,
+                        graph_path=graph_paths[feature],
                     )
                     completed = subprocess.run(command, check=False)
                     if completed.returncode != 0:
@@ -1245,6 +1362,22 @@ def build_arg_parser() -> argparse.ArgumentParser:
         help=(
             "Shuffle the candidate ID scan deterministically before selecting "
             "the requested number of eligible samples."
+        ),
+    )
+    parser.add_argument(
+        "--sample_ids_manifest",
+        default=None,
+        help=(
+            "Reuse feature selected_ids from an earlier pilot_manifest.json."
+        ),
+    )
+    parser.add_argument(
+        "--region_components",
+        nargs="+",
+        choices=tuple(SMILE_REGION_COMPONENTS),
+        default=None,
+        help=(
+            "Override the smile graph region using canonical component names."
         ),
     )
     parser.add_argument(
