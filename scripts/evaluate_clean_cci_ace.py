@@ -26,6 +26,7 @@ SUMMARY_FIELDS = (
     "fva_cosine",
     "fs_cosine",
     "mnac",
+    "cout",
     "changed_fraction_1",
     "changed_fraction_5",
     "changed_fraction_10",
@@ -131,6 +132,51 @@ def paired_cosine_similarity(source: np.ndarray, output: np.ndarray) -> np.ndarr
     )
 
 
+def binary_cout_from_smile_curves(
+    smile_probabilities: np.ndarray,
+) -> np.ndarray:
+    """Compute binary COUT from Smiling probabilities and their complement."""
+
+    curves = np.asarray(smile_probabilities, dtype=float)
+    if curves.ndim != 2 or curves.shape[1] < 2:
+        raise ValueError("COUT curves must contain at least two points")
+    if not np.isfinite(curves).all() or np.any((curves < 0) | (curves > 1)):
+        raise ValueError("COUT curves must contain finite probabilities")
+    integrate = getattr(np, "trapezoid", np.trapz)
+    denominator = curves.shape[1] - 1
+    source_area = integrate(curves, axis=1) / denominator
+    desired_area = integrate(1.0 - curves, axis=1) / denominator
+    return desired_area - source_area
+
+
+def build_cout_transitions(source, output, *, steps: int = 50):
+    """Yield source-to-output pixel insertion states in change order."""
+
+    import torch
+
+    if source.shape != output.shape or source.ndim != 4:
+        raise ValueError("COUT image batches must have equal BCHW shapes")
+    if steps <= 0:
+        raise ValueError("COUT steps must be positive")
+    batch, channels, height, width = source.shape
+    pixel_count = height * width
+    differences = torch.abs(output - source).sum(dim=1).reshape(batch, -1)
+    order = torch.argsort(differences, dim=1, descending=True)
+    current = source.clone().reshape(batch, channels, pixel_count)
+    target = output.reshape(batch, channels, pixel_count)
+    yield current.reshape(batch, channels, height, width).clone()
+    previous = 0
+    for step in range(1, steps + 1):
+        boundary = (step * pixel_count + steps - 1) // steps
+        for batch_index in range(batch):
+            indices = order[batch_index, previous:boundary]
+            current[batch_index, :, indices] = target[
+                batch_index, :, indices
+            ]
+        yield current.reshape(batch, channels, height, width).clone()
+        previous = boundary
+
+
 def correlation_difference(
     source_binary: np.ndarray,
     output_binary: np.ndarray,
@@ -208,10 +254,12 @@ def summarize_task_rows(
     """Summarize all pairs and the target-success subset separately."""
 
     successful = [row for row in rows if bool(row.get("target_success"))]
+    directional = [row for row in rows if bool(row.get("directional_flip"))]
     summary = {
         "count": len(rows),
         "target_success_count": len(successful),
         "fr": len(successful) / len(rows) if rows else 0.0,
+        "directional_fr": len(directional) / len(rows) if rows else 0.0,
         "unconditional": {},
         "target_success_conditioned": {},
     }
@@ -273,13 +321,21 @@ def _chunks(values: Sequence[Any], size: int) -> Iterable[Sequence[Any]]:
         yield values[start : start + size]
 
 
-def _image_batch(paths: Sequence[str], *, mode: str):
+def _image_batch(
+    paths: Sequence[str],
+    *,
+    mode: str,
+    size: int = 224,
+):
     import torch
     from PIL import Image
 
     tensors = []
     for path in paths:
-        image = Image.open(path).convert("RGB").resize((224, 224), Image.Resampling.BICUBIC)
+        image = Image.open(path).convert("RGB").resize(
+            (size, size),
+            Image.Resampling.BICUBIC,
+        )
         values = np.asarray(image, dtype=np.float32)
         if mode == "vggface":
             values = values[:, :, ::-1].copy()
@@ -294,6 +350,98 @@ def _image_batch(paths: Sequence[str], *, mode: str):
                 ) / np.array([0.229, 0.224, 0.225], dtype=np.float32)
         tensors.append(torch.from_numpy(values.transpose(2, 0, 1)))
     return torch.stack(tensors)
+
+
+def _paired_local_classifier_outputs(
+    model,
+    rows: Sequence[dict[str, Any]],
+    *,
+    device: str,
+    batch_size: int,
+    input_size: int,
+) -> tuple[np.ndarray, np.ndarray]:
+    """Evaluate aligned source/output pairs with the local CelebA classifier."""
+
+    import torch
+
+    from cci_diff.classifiers.celeba_resnet50 import classifier_probabilities
+
+    source_outputs = []
+    output_outputs = []
+    with torch.no_grad():
+        for batch in _chunks(rows, batch_size):
+            sources = _image_batch(
+                [row["source_path"] for row in batch],
+                mode="rgb",
+                size=input_size,
+            ).to(device)
+            outputs = _image_batch(
+                [row["output_path"] for row in batch],
+                mode="rgb",
+                size=input_size,
+            ).to(device)
+            source_outputs.append(
+                classifier_probabilities(
+                    model,
+                    sources,
+                    size=input_size,
+                ).detach().cpu().numpy()
+            )
+            output_outputs.append(
+                classifier_probabilities(
+                    model,
+                    outputs,
+                    size=input_size,
+                ).detach().cpu().numpy()
+            )
+    return np.concatenate(source_outputs), np.concatenate(output_outputs)
+
+
+def _local_classifier_cout_scores(
+    model,
+    rows: Sequence[dict[str, Any]],
+    *,
+    device: str,
+    batch_size: int,
+    input_size: int,
+    steps: int,
+) -> np.ndarray:
+    """Compute per-pair smile-removal COUT with the local classifier."""
+
+    import torch
+
+    from cci_diff.classifiers.celeba_resnet50 import classifier_probabilities
+
+    scores = []
+    with torch.no_grad():
+        for batch in _chunks(rows, batch_size):
+            if any(row["feature"] != "smile" for row in batch):
+                raise ValueError("Binary COUT currently supports smile rows only")
+            sources = _image_batch(
+                [row["source_path"] for row in batch],
+                mode="rgb",
+                size=input_size,
+            ).to(device)
+            outputs = _image_batch(
+                [row["output_path"] for row in batch],
+                mode="rgb",
+                size=input_size,
+            ).to(device)
+            curves = []
+            for transition in build_cout_transitions(
+                sources,
+                outputs,
+                steps=steps,
+            ):
+                probabilities = classifier_probabilities(
+                    model,
+                    transition,
+                    size=input_size,
+                )
+                curves.append(probabilities[:, TARGETS["smile"]["index"]])
+            smile_curves = torch.stack(curves, dim=1).cpu().numpy()
+            scores.append(binary_cout_from_smile_curves(smile_curves))
+    return np.concatenate(scores)
 
 
 def _paired_model_outputs(
@@ -424,8 +572,8 @@ def _write_report(path: Path, summaries: dict[str, Any], fid: dict[str, Any]) ->
         "",
         "## A3 Results",
         "",
-        "| Task | N | FR | FVA | FS | MNAC | CD | FID |",
-        "|---|---:|---:|---:|---:|---:|---:|---:|",
+        "| Task | N | FR | FVA | FS | MNAC | CD | COUT (guidance classifier) | FID |",
+        "|---|---:|---:|---:|---:|---:|---:|---:|---:|",
     ]
     for feature, summary in summaries.items():
         unconditional = summary["unconditional"]
@@ -434,7 +582,8 @@ def _write_report(path: Path, summaries: dict[str, Any], fid: dict[str, Any]) ->
             f"| {feature} | {summary['count']} | {100 * summary['fr']:.1f} | "
             f"{100 * (summary['fva_rate'] or 0):.1f} | "
             f"{unconditional['fs_cosine']['mean']} | "
-            f"{unconditional['mnac']['mean']} | {summary['cd']} | {fid_value} |"
+            f"{unconditional['mnac']['mean']} | {summary['cd']} | "
+            f"{unconditional['cout']['mean']} | {fid_value} |"
         )
     lines.extend(
         [
@@ -443,9 +592,9 @@ def _write_report(path: Path, summaries: dict[str, Any], fid: dict[str, Any]) ->
             "",
             "- FVA and FS compare each source embedding with its paired counterfactual embedding.",
             "- MNAC excludes the intended target attribute and therefore measures collateral flips only.",
-            "- FR is directional target success under the independent ACE oracle.",
-            "- Spatial metrics are reported unconditionally and conditioned on oracle target success.",
-            "- COUT is unavailable because the local binary-attribute mapping is not valid for this protocol.",
+            "- FR is directional target success under the configured attribute classifier.",
+            "- Spatial metrics are reported unconditionally and conditioned on target success.",
+            "- COUT uses Smiling probability and its complement from the configured guidance classifier.",
             "- FID is exploratory at 100 images per task and is not directly comparable to larger paper test sets.",
         ]
     )
@@ -457,10 +606,10 @@ def _write_ablation_report(
     summaries: dict[str, dict[str, Any]],
 ) -> None:
     lines = [
-        "# CCI Component Ablation: Independent ACE Evaluation",
+        "# CCI Component Ablation: Classifier and Embedding Evaluation",
         "",
-        "| Variant | Task | N | FR | FVA | FS | MNAC | CD | Desired probability |",
-        "|---|---|---:|---:|---:|---:|---:|---:|---:|",
+        "| Variant | Task | N | FR | FVA | FS | MNAC | CD | COUT (guidance classifier) | Desired probability |",
+        "|---|---|---:|---:|---:|---:|---:|---:|---:|---:|",
     ]
     for variant, tasks in sorted(summaries.items()):
         for feature, summary in sorted(tasks.items()):
@@ -470,12 +619,13 @@ def _write_ablation_report(
                 f"{100 * summary['fr']:.1f} | {100 * (summary['fva_rate'] or 0):.1f} | "
                 f"{unconditional['fs_cosine']['mean']:.4f} | "
                 f"{unconditional['mnac']['mean']:.4f} | {summary['cd']:.4f} | "
+                f"{unconditional['cout']['mean']} | "
                 f"{unconditional['desired_probability']['mean']:.4f} |"
             )
     lines.extend(
         [
             "",
-            "FR is directional target success under the independent ACE oracle. "
+            "FR is directional target success under the configured attribute classifier. "
             "All rows remain separated by task and ablation variant.",
         ]
     )
@@ -483,22 +633,91 @@ def _write_ablation_report(
 
 
 def evaluate(args: argparse.Namespace) -> dict[str, Any]:
+    import torch
+
+    from cci_diff.concept_graph import sha256_file
+
     experiment_root = Path(args.experiment_root)
     ace_root = Path(args.ace_root)
     rows = _read_selected_rows(experiment_root / "pilot_results.csv")
     if not rows:
         raise ValueError("No selected rows found for ACE evaluation")
+    if args.cout_steps <= 0:
+        raise ValueError("cout_steps must be positive")
+    if args.classifier_input_size <= 0:
+        raise ValueError("classifier_input_size must be positive")
 
     target_indices = np.array([TARGETS[row["feature"]]["index"] for row in rows])
     desired_values = np.array([TARGETS[row["feature"]]["desired_value"] for row in rows])
-    oracle = _load_oracle(ace_root, args.device)
-    source_probs, output_probs = _paired_model_outputs(
-        oracle,
-        rows,
-        mode="oracle",
-        device=args.device,
-        batch_size=args.batch_size,
-    )
+    if args.attribute_classifier_path:
+        from cci_diff.classifiers.celeba_resnet50 import load_celeba_resnet50
+
+        attribute_model = load_celeba_resnet50(
+            args.attribute_classifier_path,
+            device=args.device,
+            dtype=torch.float32,
+        )
+        source_probs, output_probs = _paired_local_classifier_outputs(
+            attribute_model,
+            rows,
+            device=args.device,
+            batch_size=args.batch_size,
+            input_size=args.classifier_input_size,
+        )
+        if any(row["feature"] != "smile" for row in rows):
+            cout_values = np.full(len(rows), np.nan)
+            smile_indices = [
+                index
+                for index, row in enumerate(rows)
+                if row["feature"] == "smile"
+            ]
+            smile_rows = [rows[index] for index in smile_indices]
+            smile_scores = _local_classifier_cout_scores(
+                attribute_model,
+                smile_rows,
+                device=args.device,
+                batch_size=args.batch_size,
+                input_size=args.classifier_input_size,
+                steps=args.cout_steps,
+            )
+            cout_values[smile_indices] = smile_scores
+        else:
+            cout_values = _local_classifier_cout_scores(
+                attribute_model,
+                rows,
+                device=args.device,
+                batch_size=args.batch_size,
+                input_size=args.classifier_input_size,
+                steps=args.cout_steps,
+            )
+        attribute_provenance = {
+            "role": "guidance_classifier_source_of_truth",
+            "independent": False,
+            "path": str(Path(args.attribute_classifier_path)),
+            "sha256": sha256_file(args.attribute_classifier_path),
+            "output_type": "40_independent_sigmoid_probabilities",
+            "smiling_index": TARGETS["smile"]["index"],
+            "input_size": args.classifier_input_size,
+        }
+    else:
+        attribute_model = _load_oracle(ace_root, args.device)
+        source_probs, output_probs = _paired_model_outputs(
+            attribute_model,
+            rows,
+            mode="oracle",
+            device=args.device,
+            batch_size=args.batch_size,
+        )
+        cout_values = np.full(len(rows), np.nan)
+        attribute_provenance = {
+            "role": "independent_ace_oracle",
+            "independent": True,
+            "path": str(ace_root / "models" / "checkpoint.tar"),
+            "sha256": sha256_file(ace_root / "models" / "checkpoint.tar"),
+            "output_type": "40_independent_sigmoid_probabilities",
+            "smiling_index": TARGETS["smile"]["index"],
+            "cout": "unavailable_without_attribute_classifier_path",
+        }
     target = directional_target_metrics(
         source_probs,
         output_probs,
@@ -511,7 +730,7 @@ def evaluate(args: argparse.Namespace) -> dict[str, Any]:
         output_probs,
         target_indices,
     )
-    _release_model(oracle, args.device)
+    _release_model(attribute_model, args.device)
 
     vggface = _load_vggface(ace_root, args.device)
     source_fva, output_fva = _paired_model_outputs(
@@ -544,6 +763,11 @@ def evaluate(args: argparse.Namespace) -> dict[str, Any]:
                 "target_success": bool(target["target_success"][index]),
                 "directional_flip": bool(target["directional_flip"][index]),
                 "mnac": int(mnac[index]),
+                "cout": (
+                    float(cout_values[index])
+                    if np.isfinite(cout_values[index])
+                    else None
+                ),
                 "independent_non_target_drift": float(
                     independent_drift[index]
                 ),
@@ -580,9 +804,12 @@ def evaluate(args: argparse.Namespace) -> dict[str, Any]:
                     "feature": feature,
                     "count": summary["count"],
                     "fr": summary["fr"],
+                    "directional_fr": summary["directional_fr"],
                     "fva_rate": summary["fva_rate"],
                     "fs": summary["unconditional"]["fs_cosine"]["mean"],
                     "mnac": summary["unconditional"]["mnac"]["mean"],
+                    "cout": summary["unconditional"]["cout"]["mean"],
+                    "cout_count": summary["unconditional"]["cout"]["count"],
                     "independent_non_target_drift": summary["unconditional"][
                         "independent_non_target_drift"
                     ]["mean"],
@@ -603,13 +830,31 @@ def evaluate(args: argparse.Namespace) -> dict[str, Any]:
             "tasks": summaries,
             "variants": variant_summaries,
             "fid": fid,
-            "cout": None,
+            "cout": {
+                "definition": (
+                    "AUPC(1-p_smiling)-AUPC(p_smiling)"
+                ),
+                "steps": args.cout_steps,
+                "classifier": attribute_provenance,
+            },
+            "attribute_classifier": attribute_provenance,
         }
     else:
         fid = {
             "note": "Mixed variants are evaluated separately by evaluate_fid_sfid.py."
         }
-        payload = {"variants": variant_summaries, "fid": fid, "cout": None}
+        payload = {
+            "variants": variant_summaries,
+            "fid": fid,
+            "cout": {
+                "definition": (
+                    "AUPC(1-p_smiling)-AUPC(p_smiling)"
+                ),
+                "steps": args.cout_steps,
+                "classifier": attribute_provenance,
+            },
+            "attribute_classifier": attribute_provenance,
+        }
     (experiment_root / "ace_metrics.json").write_text(
         json.dumps(payload, indent=2, allow_nan=False),
         encoding="utf-8",
@@ -627,9 +872,18 @@ def build_arg_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser()
     parser.add_argument("--experiment_root", required=True)
     parser.add_argument("--ace_root", required=True)
+    parser.add_argument(
+        "--attribute_classifier_path",
+        default=None,
+        help=(
+            "Use this local CelebA classifier for FR, MNAC, CD, and COUT."
+        ),
+    )
     parser.add_argument("--device", default="mps")
     parser.add_argument("--batch_size", type=int, default=8)
     parser.add_argument("--bootstrap_seed", type=int, default=42)
+    parser.add_argument("--classifier_input_size", type=int, default=512)
+    parser.add_argument("--cout_steps", type=int, default=50)
     return parser
 
 

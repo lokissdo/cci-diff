@@ -4,7 +4,9 @@ import numpy as np
 import pytest
 
 from scripts.evaluate_clean_cci_ace import (
+    binary_cout_from_smile_curves,
     bootstrap_mean_interval,
+    build_cout_transitions,
     collateral_flips,
     continuous_non_target_drift,
     correlation_difference,
@@ -13,6 +15,76 @@ from scripts.evaluate_clean_cci_ace import (
     paired_cosine_similarity,
     summarize_task_rows,
 )
+
+
+def test_binary_cout_uses_smile_probability_complement():
+    curves = np.array([[0.9, 0.1, 0.1]])
+
+    scores = binary_cout_from_smile_curves(curves)
+
+    assert scores == pytest.approx([0.4])
+
+
+def test_binary_cout_direction_reflects_early_desired_transition():
+    early_desired = np.array([[0.9, 0.1, 0.1]])
+    late_desired = np.array([[0.9, 0.9, 0.1]])
+    symmetric = np.array([[0.9, 0.5, 0.1]])
+
+    assert binary_cout_from_smile_curves(early_desired)[0] > 0
+    assert binary_cout_from_smile_curves(late_desired)[0] < 0
+    assert binary_cout_from_smile_curves(symmetric)[0] == pytest.approx(0.0)
+
+
+@pytest.mark.parametrize(
+    "curves",
+    [
+        np.array([[0.9, np.nan]]),
+        np.array([[0.9, 1.1]]),
+        np.array([0.9, 0.1]),
+        np.array([[0.9]]),
+    ],
+)
+def test_binary_cout_rejects_invalid_probability_curves(curves):
+    with pytest.raises(ValueError):
+        binary_cout_from_smile_curves(curves)
+
+
+def test_cout_transitions_insert_largest_changed_pixels_first():
+    import torch
+
+    source = torch.zeros((1, 1, 1, 3))
+    output = torch.tensor([[[[0.1, 0.9, 0.5]]]])
+
+    transitions = list(build_cout_transitions(source, output, steps=3))
+
+    assert len(transitions) == 4
+    assert torch.equal(transitions[0], source)
+    torch.testing.assert_close(
+        transitions[1],
+        torch.tensor([[[[0.0, 0.9, 0.0]]]]),
+    )
+    torch.testing.assert_close(
+        transitions[2],
+        torch.tensor([[[[0.0, 0.9, 0.5]]]]),
+    )
+    assert torch.equal(transitions[3], output)
+
+
+def test_classifier_metric_parser_accepts_local_attribute_model():
+    from scripts.evaluate_clean_cci_ace import build_arg_parser
+
+    args = build_arg_parser().parse_args(
+        [
+            "--experiment_root",
+            "outputs/test",
+            "--ace_root",
+            "thesis/evaluate/ACE",
+            "--attribute_classifier_path",
+            "models/classifier.pth",
+        ]
+    )
+
+    assert args.attribute_classifier_path == "models/classifier.pth"
 
 
 def test_continuous_non_target_drift_excludes_each_target():
