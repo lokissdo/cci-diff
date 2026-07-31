@@ -440,6 +440,18 @@ def resolve_region_components(
     }
 
 
+def resolve_binding_roles(
+    feature: str,
+    region_components: list[str] | tuple[str, ...] | None,
+) -> dict[str, str]:
+    """Return binding roles restricted to the active graph region."""
+
+    if feature != "smile" or region_components is None:
+        return dict(FEATURES[feature]["binding_roles"])
+    _, annotation_components = resolve_region_components(region_components)
+    return annotation_components
+
+
 def write_region_graph(
     source_path: str | Path,
     destination: str | Path,
@@ -1154,13 +1166,17 @@ def run_pilot(args: argparse.Namespace) -> dict[str, Any]:
     failed_path = output_dir / "failures.jsonl"
     for feature in args.features:
         config = FEATURES[feature]
+        binding_roles = resolve_binding_roles(
+            feature,
+            getattr(args, "region_components", None),
+        )
         for sample_id, source, masks in selected_by_feature[feature]:
             binding_path = output_dir / "bindings" / f"{feature}_{sample_id:05d}.json"
             write_binding(
                 binding_path,
                 source,
                 masks,
-                config["binding_roles"],
+                binding_roles,
             )
             for variant in args.variants:
                 result_dir = output_dir / feature / f"{sample_id:05d}" / variant

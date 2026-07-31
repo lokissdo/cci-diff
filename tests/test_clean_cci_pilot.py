@@ -252,6 +252,29 @@ class TestCleanCCIPilot(unittest.TestCase):
             (("mouth",), {"mouth": "mouth"}),
         )
 
+    def test_binding_roles_match_active_smile_region_components(self):
+        from scripts.run_clean_cci_pilot import resolve_binding_roles
+
+        self.assertEqual(
+            resolve_binding_roles("smile", ["mouth"]),
+            {"mouth": "mouth"},
+        )
+        self.assertEqual(
+            resolve_binding_roles(
+                "smile",
+                ["mouth", "upper_lip", "lower_lip"],
+            ),
+            {
+                "mouth": "mouth",
+                "upper_lip": "u_lip",
+                "lower_lip": "l_lip",
+            },
+        )
+        self.assertEqual(
+            resolve_binding_roles("hair", None),
+            {"hair": "hair"},
+        )
+
     def test_region_graph_override_does_not_modify_source_graph(self):
         from scripts.run_clean_cci_pilot import write_region_graph
 
