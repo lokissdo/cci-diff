@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import csv
+import json
 from pathlib import Path
 
 import pytest
@@ -119,3 +120,17 @@ def test_scheduler_contains_both_sequential_attacked_region_jobs():
     assert script.index("--region_components mouth") < script.index(
         "--region_components mouth upper_lip lower_lip"
     )
+
+
+def test_scheduler_excludes_only_unreliable_face_image():
+    script = Path("scripts/run_attacked_region_300.sh").read_text(
+        encoding="utf-8"
+    )
+    exclusions = json.loads(
+        Path("examples/attacked_region_excluded_ids.json").read_text(
+            encoding="utf-8"
+        )
+    )
+
+    assert '--exclude_ids_json "$EXCLUDED_IDS"' in script
+    assert exclusions == {"smile": [10260]}

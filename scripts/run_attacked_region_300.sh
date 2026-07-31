@@ -12,6 +12,7 @@ IDENTITY="$ROOT/models/facenet_vggface2.ts"
 MODEL="$ROOT/checkpoints/sd2-1-base"
 IMAGE_ROOT="$ROOT/data/CelebAMask-HQ/CelebA-HQ-img"
 MASK_ROOT="$ROOT/data/CelebAMask-HQ/CelebAMask-HQ-mask-anno"
+EXCLUDED_IDS="$ROOT/examples/attacked_region_excluded_ids.json"
 
 mkdir -p "$OUTPUT_ROOT"
 exec > >(tee -a "$OUTPUT_ROOT/scheduler.log") 2>&1
@@ -43,6 +44,7 @@ run_generation() {
         --output_dir "$output_dir" \
         --image_root "$IMAGE_ROOT" \
         --mask_root "$MASK_ROOT" \
+        --exclude_ids_json "$EXCLUDED_IDS" \
         --controller_modes disabled trust_region \
         --mask_dilations 8 \
         --cci_post_attack smooth_boundary \
