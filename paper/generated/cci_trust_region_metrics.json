@@ -16,8 +16,7 @@
   "methods": {
     "A0": {
       "count": 200,
-      "flip_rate": 0.175,
-      "feasibility_rate": 0.08,
+      "target_pass_rate": 0.175,
       "mean_identity_cosine": 0.875651173889637,
       "mean_strict_outside_mae": 4.340205919742584,
       "mean_non_target_drift": 0.047703753915879235,
@@ -25,8 +24,7 @@
     },
     "A10": {
       "count": 200,
-      "flip_rate": 0.385,
-      "feasibility_rate": 0.345,
+      "target_pass_rate": 0.385,
       "mean_identity_cosine": 0.9254664504528045,
       "mean_strict_outside_mae": 4.333657087087631,
       "mean_non_target_drift": 0.07202659068857278,
@@ -34,8 +32,7 @@
     },
     "A11": {
       "count": 200,
-      "flip_rate": 0.375,
-      "feasibility_rate": 0.32,
+      "target_pass_rate": 0.375,
       "mean_identity_cosine": 0.9221427899599075,
       "mean_strict_outside_mae": 4.33935900092125,
       "mean_non_target_drift": 0.06349404586286461,

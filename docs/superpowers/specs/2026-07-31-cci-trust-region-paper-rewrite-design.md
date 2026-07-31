@@ -89,7 +89,8 @@ sampling step.
 
 ### 4. Experimental Protocol
 
-Describe CelebAMask-HQ smile removal, mouth-only semantic support, SD2.1/35
+Describe CelebAMask-HQ smile removal, fixed perioral semantic support (mouth,
+upper lip, and lower lip), SD2.1/35
 steps/seed 42/MPS float32, one output per source, and paired A0/A10/A11 arms.
 
 Separate two protocols:
@@ -108,8 +109,9 @@ model evaluation, not an independent-oracle result.
 Use three result blocks:
 
 1. **Completed clean A0/A10/A11 results.** Aggregate the two 100-image cohorts
-   and report target flip rate, feasibility, identity cosine, outside-mask
-   error, non-target drift when validly aggregated, and runtime. Distinguish
+   and report target-pass rate at the declared 0.8 probability requirement,
+   identity cosine, outside-mask error,
+   non-target drift, and runtime. Distinguish
    generation-classifier measurements from independent metrics.
 2. **Final-restoration mechanism ablation.** Present sample 26811 as an
    illustrative mechanism ablation, not population evidence. Report target,

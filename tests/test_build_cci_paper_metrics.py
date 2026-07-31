@@ -85,7 +85,7 @@ def test_build_metrics_aggregates_disjoint_paired_cohorts(tmp_path: Path):
 
     assert result["cohort"]["unique_sources"] == 4
     assert result["methods"]["A11"]["count"] == 4
-    assert result["methods"]["A11"]["flip_rate"] == pytest.approx(1.0)
+    assert result["methods"]["A11"]["target_pass_rate"] == pytest.approx(1.0)
     assert result["methods"]["A11"]["mean_identity_cosine"] == pytest.approx(
         0.92
     )
@@ -94,7 +94,15 @@ def test_build_metrics_aggregates_disjoint_paired_cohorts(tmp_path: Path):
     tex_path = tmp_path / "metrics.tex"
     write_tex(result, tex_path)
     assert "\\newcommand{\\AdaptiveCCISampleCount}{4}" in tex_path.read_text()
-    assert "\\newcommand{\\AdaptiveCCIFlipRatePct}{100.0}" in tex_path.read_text()
+    assert (
+        "\\newcommand{\\AdaptiveCCITargetPassRatePct}{100.0}"
+        in tex_path.read_text()
+    )
+    assert (
+        "\\newcommand{\\AdaptiveDriftReductionVsFixedPct}{14.3}"
+        in tex_path.read_text()
+    )
+    assert "\\newcommand{\\RestorationAcceptedSteps}{8}" in tex_path.read_text()
 
 
 def test_build_metrics_rejects_cross_cohort_duplicate_sources(tmp_path: Path):

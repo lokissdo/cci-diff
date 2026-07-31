@@ -82,11 +82,8 @@ def build_metrics(
         rows = [row for row in all_rows if row["variant"] == variant]
         methods[variant] = {
             "count": len(rows),
-            "flip_rate": statistics.fmean(
+            "target_pass_rate": statistics.fmean(
                 _truth(row["target_pass"]) for row in rows
-            ),
-            "feasibility_rate": statistics.fmean(
-                _truth(row["feasible"]) for row in rows
             ),
             "mean_identity_cosine": _mean(rows, "identity_cosine"),
             "mean_strict_outside_mae": _mean(rows, "strict_outside_mae"),
@@ -124,8 +121,7 @@ def write_tex(payload: dict[str, object], path: Path) -> None:
         prefix = PREFIXES[variant]
         commands = {
             "SampleCount": f'{values["count"]}',
-            "FlipRatePct": f'{100 * values["flip_rate"]:.1f}',
-            "FeasibleRatePct": f'{100 * values["feasibility_rate"]:.1f}',
+            "TargetPassRatePct": f'{100 * values["target_pass_rate"]:.1f}',
             "IdentityCosine": f'{values["mean_identity_cosine"]:.4f}',
             "OutsideMAE": f'{values["mean_strict_outside_mae"]:.3f}',
             "NonTargetDrift": f'{values["mean_non_target_drift"]:.4f}',
@@ -135,6 +131,36 @@ def write_tex(payload: dict[str, object], path: Path) -> None:
             f"\\newcommand{{\\{prefix}{name}}}{{{value}}}"
             for name, value in commands.items()
         )
+    fixed_drift = methods["A10"]["mean_non_target_drift"]
+    adaptive_drift = methods["A11"]["mean_non_target_drift"]
+    reduction = 100.0 * (fixed_drift - adaptive_drift) / fixed_drift
+    lines.append(
+        "\\newcommand{\\AdaptiveDriftReductionVsFixedPct}"
+        f"{{{reduction:.1f}}}"
+    )
+    restoration = payload["restoration"]
+    before = restoration["before"]
+    after = restoration["after"]
+    pixel = restoration["pixel"]
+    restoration_commands = {
+        "RestorationSampleID": f'{restoration["sample_id"]}',
+        "RestorationBeforeProbability": f'{before["desired_probability"]:.4f}',
+        "RestorationAfterProbability": f'{after["desired_probability"]:.4f}',
+        "RestorationBeforeIdentity": f'{before["identity_cosine"]:.4f}',
+        "RestorationAfterIdentity": f'{after["identity_cosine"]:.4f}',
+        "RestorationBeforeDrift": f'{before["mean_non_target_drift"]:.4f}',
+        "RestorationAfterDrift": f'{after["mean_non_target_drift"]:.4f}',
+        "RestorationBeforeRuntime": f'{before["wall_seconds"]:.1f}',
+        "RestorationAfterRuntime": f'{after["wall_seconds"]:.1f}',
+        "RestorationPixelMAE": f'{pixel["mean_absolute_difference"]:.6f}',
+        "RestorationPixelMax": f'{pixel["maximum_absolute_difference"]:.4f}',
+        "RestorationChangedPct": f'{100 * pixel["changed_fraction"]:.2f}',
+        "RestorationAcceptedSteps": f'{restoration["accepted_steps"]}',
+    }
+    lines.extend(
+        f"\\newcommand{{\\{name}}}{{{value}}}"
+        for name, value in restoration_commands.items()
+    )
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text("\n".join(lines) + "\n", encoding="utf-8")
 

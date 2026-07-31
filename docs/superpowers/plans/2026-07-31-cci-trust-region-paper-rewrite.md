@@ -118,14 +118,14 @@ def test_build_metrics_aggregates_disjoint_paired_cohorts(tmp_path: Path):
 
     assert result["cohort"]["unique_sources"] == 4
     assert result["methods"]["A11"]["count"] == 4
-    assert result["methods"]["A11"]["flip_rate"] == pytest.approx(1.0)
+    assert result["methods"]["A11"]["target_pass_rate"] == pytest.approx(1.0)
     assert result["methods"]["A11"]["mean_identity_cosine"] == pytest.approx(0.92)
     assert result["restoration"]["accepted_steps"] == 8
 
     tex_path = tmp_path / "metrics.tex"
     write_tex(result, tex_path)
     assert "\\newcommand{\\AdaptiveCCISampleCount}{4}" in tex_path.read_text()
-    assert "\\newcommand{\\AdaptiveCCIFlipRatePct}{100.0}" in tex_path.read_text()
+    assert "\\newcommand{\\AdaptiveCCITargetPassRatePct}{100.0}" in tex_path.read_text()
 
 
 def test_build_metrics_rejects_cross_cohort_duplicate_sources(tmp_path: Path):
@@ -222,8 +222,7 @@ def build_metrics(
         rows = [row for row in all_rows if row["variant"] == variant]
         methods[variant] = {
             "count": len(rows),
-            "flip_rate": statistics.fmean(_truth(row["target_pass"]) for row in rows),
-            "feasibility_rate": statistics.fmean(_truth(row["feasible"]) for row in rows),
+            "target_pass_rate": statistics.fmean(_truth(row["target_pass"]) for row in rows),
             "mean_identity_cosine": _mean(rows, "identity_cosine"),
             "mean_strict_outside_mae": _mean(rows, "strict_outside_mae"),
             "mean_non_target_drift": _mean(rows, "non_target_drift"),
@@ -259,8 +258,7 @@ def write_tex(payload: dict[str, object], path: Path) -> None:
         prefix = PREFIXES[variant]
         commands = {
             "SampleCount": f'{values["count"]}',
-            "FlipRatePct": f'{100 * values["flip_rate"]:.1f}',
-            "FeasibleRatePct": f'{100 * values["feasibility_rate"]:.1f}',
+            "TargetPassRatePct": f'{100 * values["target_pass_rate"]:.1f}',
             "IdentityCosine": f'{values["mean_identity_cosine"]:.4f}',
             "OutsideMAE": f'{values["mean_strict_outside_mae"]:.3f}',
             "NonTargetDrift": f'{values["mean_non_target_drift"]:.4f}',
@@ -424,7 +422,8 @@ acceptance rules, and saved uint8 re-evaluation.
 
 - [ ] **Step 4: Write the experimental protocol and completed clean table**
 
-State the exact completed protocol: CelebAMask-HQ smile removal, mouth mask,
+State the exact completed protocol: CelebAMask-HQ smile removal, fixed
+mouth/upper-lip/lower-lip semantic union,
 two disjoint 100-image random cohorts, 200 unique paired sources, seed 42,
 SD2.1 base, DDIM, 35 steps, CFG 5.0, blend start 0.25, 512 square pixels,
 float32 MPS, batch one, and no post-generation attack.
@@ -435,26 +434,27 @@ lexicographic CCI. Do not describe A0 runtime as CCI runtime.
 Populate the table exclusively with generated commands:
 
 ```latex
-\begin{tabular}{lrrrrrr}
+\begin{tabular}{lrrrrr}
 \toprule
-Method & FR & Feas. & Identity & Outside & NT drift & Time \\
+Method & Target@0.8 & Identity & Outside & NT drift & Time \\
 \midrule
-A0 BLD & \RawBLDFlipRatePct & \RawBLDFeasibleRatePct &
+A0 BLD & \RawBLDTargetPassRatePct &
 \RawBLDIdentityCosine & \RawBLDOutsideMAE &
 \RawBLDNonTargetDrift & \RawBLDRuntimeMedian \\
-A10 fixed & \FixedCCIFlipRatePct & \FixedCCIFeasibleRatePct &
+A10 fixed & \FixedCCITargetPassRatePct &
 \FixedCCIIdentityCosine & \FixedCCIOutsideMAE &
 \FixedCCINonTargetDrift & \FixedCCIRuntimeMedian \\
-A11 adaptive & \AdaptiveCCIFlipRatePct & \AdaptiveCCIFeasibleRatePct &
+A11 adaptive & \AdaptiveCCITargetPassRatePct &
 \AdaptiveCCIIdentityCosine & \AdaptiveCCIOutsideMAE &
 \AdaptiveCCINonTargetDrift & \AdaptiveCCIRuntimeMedian \\
 \bottomrule
 \end{tabular}
 ```
 
-Define FR as the directional threshold crossing of the explained classifier,
-feasibility as the current joint target/identity/locality rule, identity as
-FaceNet cosine, outside as strict outside-mask MAE, NT drift as mean absolute
+Define Target@0.8 as reaching the declared desired probability 0.8 under the
+explained classifier. Reserve FR for the pending attacked evaluation at the
+0.5 decision boundary. Identity is FaceNet cosine, outside is strict
+outside-mask MAE, and NT drift is mean absolute
 probability drift over all non-target attributes, and time as per-image median
 seconds.
 
@@ -599,4 +599,3 @@ git add -f paper/cci_trust_region.tex \
   paper/generated/cci_trust_region_metrics.tex
 git commit -m "docs: verify trust-region CCI manuscript"
 ```
-
