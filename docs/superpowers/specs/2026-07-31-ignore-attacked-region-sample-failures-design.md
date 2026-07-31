@@ -1,23 +1,24 @@
-# Ignore Attacked-Region Sample Failures
+# Exclude Attacked-Region Image 10260
 
 ## Problem
 
-`scripts/run_attacked_region_300.sh` invokes the clean CCI pilot without its
-existing `--continue_on_error` option. A source-specific failure, such as an
-undetectable FaceNet source face, therefore stops the entire generation run.
+Image `10260` passes the pilot's initial eligibility check but FaceNet cannot
+detect a face after the source passes through the runtime image path. Its
+failure stops the attacked-region generation run.
 
 ## Design
 
-Pass `--continue_on_error` from the attacked-region launcher's shared
-`run_generation` command. The pilot will record failed candidates in
-`failures.jsonl`, omit incomplete samples from its result rows, and continue
-with later variants and samples using its existing tested behavior.
+Add a targeted exclusion JSON containing `{"smile": [10260]}` and pass it to
+the attacked-region launcher's shared `run_generation` command through the
+pilot's existing `--exclude_ids_json` option. The deterministic selector will
+skip only image `10260` and select the next eligible image to retain the
+requested 300-image cohort.
 
-This change does not alter face detection, sample eligibility, replacement
-selection, exact-count validation, or downstream metric requirements.
+This change does not alter face detection, general error handling,
+exact-count validation, or downstream metric requirements.
 
 ## Testing
 
-Extend the attacked-region scheduler test to require
-`--continue_on_error` in the pilot invocation. Run that focused test and the
-existing clean-pilot continuation regression test.
+Extend the attacked-region scheduler test to require the targeted exclusion
+file and `--exclude_ids_json` in the pilot invocation. Run that focused test
+and the existing clean-pilot exclusion tests.
