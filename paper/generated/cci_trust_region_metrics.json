@@ -1,0 +1,66 @@
+{
+  "cohort": {
+    "cohorts": [
+      {
+        "path": "outputs/trust_region_random100_seed42/pilot_results.csv",
+        "source_count": 100
+      },
+      {
+        "path": "outputs/trust_region_random100_seed42_part2/pilot_results.csv",
+        "source_count": 100
+      }
+    ],
+    "unique_sources": 200,
+    "post_attack": false
+  },
+  "methods": {
+    "A0": {
+      "count": 200,
+      "flip_rate": 0.175,
+      "feasibility_rate": 0.08,
+      "mean_identity_cosine": 0.875651173889637,
+      "mean_strict_outside_mae": 4.340205919742584,
+      "mean_non_target_drift": 0.047703753915879235,
+      "median_runtime_seconds": 20.426793207996525
+    },
+    "A10": {
+      "count": 200,
+      "flip_rate": 0.385,
+      "feasibility_rate": 0.345,
+      "mean_identity_cosine": 0.9254664504528045,
+      "mean_strict_outside_mae": 4.333657087087631,
+      "mean_non_target_drift": 0.07202659068857278,
+      "median_runtime_seconds": 81.77034481249575
+    },
+    "A11": {
+      "count": 200,
+      "flip_rate": 0.375,
+      "feasibility_rate": 0.32,
+      "mean_identity_cosine": 0.9221427899599075,
+      "mean_strict_outside_mae": 4.33935900092125,
+      "mean_non_target_drift": 0.06349404586286461,
+      "median_runtime_seconds": 85.86747972900048
+    }
+  },
+  "restoration": {
+    "sample_id": 26811,
+    "before": {
+      "desired_probability": 0.10463821887969971,
+      "identity_cosine": 0.8347790241241455,
+      "mean_non_target_drift": 0.032710533649431175,
+      "wall_seconds": 53.45506249999744
+    },
+    "after": {
+      "desired_probability": 0.7945839166641235,
+      "identity_cosine": 0.8704066872596741,
+      "mean_non_target_drift": 0.06000728184536013,
+      "wall_seconds": 85.10191350002424
+    },
+    "pixel": {
+      "mean_absolute_difference": 0.0008098925463855267,
+      "maximum_absolute_difference": 0.29411762952804565,
+      "changed_fraction": 0.04036712646484375
+    },
+    "accepted_steps": 8
+  }
+}
