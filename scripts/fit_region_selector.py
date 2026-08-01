@@ -456,13 +456,27 @@ def provenance_from_manifests(
     if _pairwise_cohort_overlap({name: set(values) for name, values in cohorts.items()}):
         raise ValueError("split manifest cohorts must be pairwise disjoint")
     declared_source_ids = {int(value) for value in source.get("sample_ids", ())}
-    split_ids = {value for values in cohorts.values() for value in values}
-    if declared_source_ids != split_ids:
-        raise ValueError("source feature IDs disagree with split manifest")
+    development_ids = {
+        value
+        for name in ("discovery", "fit", "calibration")
+        for value in cohorts[name]
+    }
+    if declared_source_ids != development_ids:
+        raise ValueError(
+            "source feature IDs must equal development cohorts only"
+        )
     if source_features is not None:
         expected_digest = source.get("source_features_sha256")
         if expected_digest != sha256_file(source_features):
             raise ValueError("source feature CSV SHA-256 mismatch")
+        with Path(source_features).open(newline="", encoding="utf-8") as handle:
+            feature_ids = {
+                int(row["sample_id"]) for row in csv.DictReader(handle)
+            }
+        if feature_ids != development_ids:
+            raise ValueError(
+                "source feature CSV IDs must equal development cohorts only"
+            )
     return {
         name: str(source[name]) for name in required
     } | {

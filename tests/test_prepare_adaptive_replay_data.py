@@ -4,6 +4,7 @@ from pathlib import Path
 
 import pytest
 
+from cci_diff.development_cohort import DevelopmentCohort
 from scripts.prepare_adaptive_replay_data import (
     _read_ids,
     prepare_adaptive_replay_data,
@@ -130,6 +131,36 @@ def test_preparation_is_deterministic_for_same_seed(tmp_path):
     assert (tmp_path / "first/development_outcomes.csv").read_bytes() == (
         tmp_path / "second/development_outcomes.csv"
     ).read_bytes()
+
+
+def test_external_evaluation_ids_need_no_candidate_outputs(tmp_path):
+    development_ids = (1, 2, 3)
+    cohort = DevelopmentCohort(
+        discovery=(1,),
+        fit=(2,),
+        calibration=(3,),
+        data_size=3,
+        seed=42,
+    )
+
+    result = prepare_adaptive_replay_data(
+        {
+            MOUTH: write_results(tmp_path / "mouth.csv", development_ids),
+            PERIORAL: write_results(
+                tmp_path / "perioral.csv", development_ids
+            ),
+        },
+        tmp_path / "prepared",
+        development_cohort=cohort,
+        evaluation_ids=(100, 101),
+    )
+
+    assert result["cohorts"]["evaluation"] == [100, 101]
+    development_text = (
+        tmp_path / "prepared/development_outcomes.csv"
+    ).read_text(encoding="utf-8")
+    assert "100" not in development_text
+    assert "101" not in development_text
 
 
 def test_read_ids_supports_clean_pilot_selected_ids_manifest(tmp_path):

@@ -18,6 +18,7 @@ if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
 from cci_diff.concept_graph import sha256_file  # noqa: E402
+from cci_diff.development_cohort import DevelopmentCohort  # noqa: E402
 
 
 RegionTuple = tuple[str, ...]
@@ -123,12 +124,14 @@ def prepare_adaptive_replay_data(
     candidate_results: Mapping[RegionTuple | str, str | Path],
     output_dir: str | Path,
     *,
-    sample_ids: Iterable[int],
-    discovery_count: int,
-    fit_count: int,
-    calibration_count: int,
-    evaluation_count: int,
-    random_seed: int,
+    sample_ids: Iterable[int] | None = None,
+    discovery_count: int | None = None,
+    fit_count: int | None = None,
+    calibration_count: int | None = None,
+    evaluation_count: int | None = None,
+    random_seed: int = 42,
+    development_cohort: DevelopmentCohort | None = None,
+    evaluation_ids: Iterable[int] = (),
     variant: str = "A11",
     target: str = "Smiling",
     desired_value: int = 0,
@@ -139,28 +142,61 @@ def prepare_adaptive_replay_data(
 
     if desired_value not in (0, 1) or isinstance(desired_value, bool):
         raise ValueError("desired_value must be zero or one")
-    counts = (
-        discovery_count,
-        fit_count,
-        calibration_count,
-        evaluation_count,
-    )
-    if any(value <= 0 for value in counts):
-        raise ValueError("all four cohort counts must be positive")
-    ordered = _deterministic_order(sample_ids, random_seed)
-    if sum(counts) != len(ordered):
-        raise ValueError(
-            "cohort counts must sum to the number of unique sample IDs"
+    if development_cohort is not None:
+        if sample_ids is not None or any(
+            value is not None
+            for value in (
+                discovery_count,
+                fit_count,
+                calibration_count,
+                evaluation_count,
+            )
+        ):
+            raise ValueError(
+                "development_cohort cannot be combined with legacy split inputs"
+            )
+        external_evaluation = [int(value) for value in evaluation_ids]
+        if not external_evaluation or len(external_evaluation) != len(
+            set(external_evaluation)
+        ):
+            raise ValueError("evaluation_ids must be non-empty and unique")
+        if development_cohort.all_ids.intersection(external_evaluation):
+            raise ValueError(
+                "development and evaluation IDs must be pairwise disjoint"
+            )
+        cohorts = {
+            "discovery": list(development_cohort.discovery),
+            "fit": list(development_cohort.fit),
+            "calibration": list(development_cohort.calibration),
+            "evaluation": external_evaluation,
+        }
+        split_seed = development_cohort.seed
+    else:
+        counts = (
+            discovery_count,
+            fit_count,
+            calibration_count,
+            evaluation_count,
         )
-    cut1 = discovery_count
-    cut2 = cut1 + fit_count
-    cut3 = cut2 + calibration_count
-    cohorts = {
-        "discovery": ordered[:cut1],
-        "fit": ordered[cut1:cut2],
-        "calibration": ordered[cut2:cut3],
-        "evaluation": ordered[cut3:],
-    }
+        if sample_ids is None or any(
+            value is None or value <= 0 for value in counts
+        ):
+            raise ValueError("all four legacy cohort counts must be positive")
+        ordered = _deterministic_order(sample_ids, random_seed)
+        if sum(counts) != len(ordered):
+            raise ValueError(
+                "cohort counts must sum to the number of unique sample IDs"
+            )
+        cut1 = int(discovery_count)
+        cut2 = cut1 + int(fit_count)
+        cut3 = cut2 + int(calibration_count)
+        cohorts = {
+            "discovery": ordered[:cut1],
+            "fit": ordered[cut1:cut2],
+            "calibration": ordered[cut2:cut3],
+            "evaluation": ordered[cut3:],
+        }
+        split_seed = random_seed
     development_ids = (
         set(cohorts["discovery"])
         | set(cohorts["fit"])
@@ -254,7 +290,7 @@ def prepare_adaptive_replay_data(
         )
     manifest = {
         "version": 1,
-        "random_seed": random_seed,
+        "random_seed": split_seed,
         "generation_variant": variant,
         "generation_seed": generation_seed,
         "target": target,

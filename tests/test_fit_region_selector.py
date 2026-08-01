@@ -135,7 +135,10 @@ def test_fit_requires_all_four_nonempty_cohorts(tmp_path):
 
 def test_provenance_can_be_built_from_source_and_split_manifests(tmp_path):
     features = tmp_path / "source_features.csv"
-    features.write_text("sample_id,regions\n1,mouth\n", encoding="utf-8")
+    features.write_text(
+        "sample_id,regions\n1,mouth\n2,mouth\n3,mouth\n",
+        encoding="utf-8",
+    )
     features_sha = hashlib.sha256(features.read_bytes()).hexdigest()
     source = tmp_path / "source_manifest.json"
     source.write_text(
@@ -144,7 +147,7 @@ def test_provenance_can_be_built_from_source_and_split_manifests(tmp_path):
                 "feature_signature": "b" * 64,
                 "classifier_sha256": "c" * 64,
                 "generation_policy_signature": "d" * 64,
-                "sample_ids": [1, 2, 3, 4],
+                "sample_ids": [1, 2, 3],
                 "source_features_sha256": features_sha,
             }
         ),
@@ -174,6 +177,43 @@ def test_provenance_can_be_built_from_source_and_split_manifests(tmp_path):
     assert len(result["split_manifest_sha256"]) == 64
 
 
+def test_provenance_rejects_evaluation_features(tmp_path):
+    features = tmp_path / "source_features.csv"
+    features.write_text("sample_id,regions\n1,mouth\n4,mouth\n", encoding="utf-8")
+    source = tmp_path / "source_manifest.json"
+    source.write_text(
+        json.dumps(
+            {
+                "feature_signature": "b" * 64,
+                "classifier_sha256": "c" * 64,
+                "generation_policy_signature": "d" * 64,
+                "sample_ids": [1, 4],
+                "source_features_sha256": hashlib.sha256(
+                    features.read_bytes()
+                ).hexdigest(),
+            }
+        ),
+        encoding="utf-8",
+    )
+    split = tmp_path / "split_manifest.json"
+    split.write_text(
+        json.dumps(
+            {
+                "cohorts": {
+                    "discovery": [1],
+                    "fit": [2],
+                    "calibration": [3],
+                    "evaluation": [4],
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ValueError, match="development cohorts only"):
+        provenance_from_manifests(source, split, features)
+
+
 def test_provenance_rejects_edited_source_feature_csv(tmp_path):
     features = tmp_path / "source_features.csv"
     features.write_text("original", encoding="utf-8")
@@ -184,7 +224,7 @@ def test_provenance_rejects_edited_source_feature_csv(tmp_path):
                 "feature_signature": "b" * 64,
                 "classifier_sha256": "c" * 64,
                 "generation_policy_signature": "d" * 64,
-                "sample_ids": [1, 2, 3, 4],
+                "sample_ids": [1, 2, 3],
                 "source_features_sha256": "0" * 64,
             }
         ),
