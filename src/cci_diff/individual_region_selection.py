@@ -5,7 +5,7 @@ from __future__ import annotations
 import itertools
 import json
 import math
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from types import MappingProxyType
 from typing import Mapping
@@ -20,6 +20,28 @@ RegionTuple = tuple[str, ...]
 
 
 @dataclass(frozen=True)
+class FrozenRegionSetEvidence:
+    """Finite discovery statistics for one selector candidate."""
+
+    mean_effect: float
+    flip_rate: float
+    effect_ci_low: float
+    mean_mask_fraction: float
+
+    def __post_init__(self) -> None:
+        for name in (
+            "mean_effect",
+            "flip_rate",
+            "effect_ci_low",
+            "mean_mask_fraction",
+        ):
+            if not math.isfinite(float(getattr(self, name))):
+                raise ValueError(f"{name} must be finite")
+        if self.mean_mask_fraction <= 0.0:
+            raise ValueError("mean_mask_fraction must be positive")
+
+
+@dataclass(frozen=True)
 class FrozenInfluencePolicy:
     """Immutable class-level region evidence used during held-out inference."""
 
@@ -30,11 +52,23 @@ class FrozenInfluencePolicy:
     region_set_effects: Mapping[RegionTuple, float]
     graph_path: str
     graph_sha256: str
+    candidate_region_sets: tuple[RegionTuple, ...] = ()
+    region_set_evidence: Mapping[
+        RegionTuple, FrozenRegionSetEvidence
+    ] = field(default_factory=dict)
 
     def __post_init__(self) -> None:
         target = self.target.strip()
         verified = _canonical_regions(self.verified_regions)
         fallback = _canonical_regions(self.fallback_regions)
+        candidates = tuple(
+            sorted(
+                {
+                    _canonical_regions(regions)
+                    for regions in self.candidate_region_sets
+                }
+            )
+        )
         if not target:
             raise ValueError("target must be non-empty")
         if isinstance(self.desired_value, bool) or self.desired_value not in (0, 1):
@@ -45,6 +79,11 @@ class FrozenInfluencePolicy:
             raise ValueError("verified_regions cannot contain more than eight regions")
         if not fallback or not set(fallback).issubset(verified):
             raise ValueError("fallback regions must be non-empty and verified")
+        if any(
+            not regions or not set(regions).issubset(verified)
+            for regions in candidates
+        ):
+            raise ValueError("candidate region sets must be non-empty and verified")
         effects = {}
         for regions, effect in self.region_set_effects.items():
             canonical = _canonical_regions(regions)
@@ -56,13 +95,29 @@ class FrozenInfluencePolicy:
             if canonical in effects:
                 raise ValueError(f"Duplicate region-set effect: {canonical}")
             effects[canonical] = value
+        evidence = {}
+        for regions, item in self.region_set_evidence.items():
+            canonical = _canonical_regions(regions)
+            if not canonical or not set(canonical).issubset(verified):
+                raise ValueError("region-set evidence must use verified regions")
+            if not isinstance(item, FrozenRegionSetEvidence):
+                raise TypeError("region_set_evidence values must be frozen evidence")
+            if canonical in evidence:
+                raise ValueError(f"Duplicate frozen region-set evidence: {canonical}")
+            evidence[canonical] = item
         object.__setattr__(self, "target", target)
         object.__setattr__(self, "verified_regions", verified)
         object.__setattr__(self, "fallback_regions", fallback)
+        object.__setattr__(self, "candidate_region_sets", candidates)
         object.__setattr__(
             self,
             "region_set_effects",
             MappingProxyType(effects),
+        )
+        object.__setattr__(
+            self,
+            "region_set_evidence",
+            MappingProxyType(evidence),
         )
 
     def global_effect(self, regions: RegionTuple) -> float:
@@ -138,15 +193,23 @@ def load_frozen_influence_policy(
     if not audit_regions:
         raise ValueError("Influence graph has no verified regions")
     generation_regions = payload.get("generation_regions")
-    verified_regions = (
-        _canonical_regions(generation_regions)
-        if generation_regions is not None
-        else audit_regions
+    verified_regions = audit_regions
+    raw_candidates = payload.get("candidate_region_sets")
+    if raw_candidates is None:
+        legacy_candidate = generation_regions or payload.get("selected_regions")
+        raw_candidates = [legacy_candidate] if legacy_candidate else []
+    candidate_region_sets = tuple(
+        sorted({_canonical_regions(regions) for regions in raw_candidates})
     )
-    if not verified_regions:
-        raise ValueError("Influence graph has no generation regions")
+    fallback_regions = _canonical_regions(
+        payload.get("fallback_regions")
+        or generation_regions
+        or payload.get("selected_regions")
+        or ()
+    )
 
     effects = {}
+    frozen_evidence = {}
     for item in payload.get("region_set_evidence") or []:
         try:
             regions = _canonical_regions(item["regions"])
@@ -160,19 +223,32 @@ def load_frozen_influence_policy(
         if regions in effects:
             raise ValueError(f"Duplicate region-set evidence: {regions}")
         effects[regions] = effect
+        complete_fields = (
+            "flip_rate",
+            "effect_ci_low",
+            "mean_mask_fraction",
+        )
+        if all(item.get(name) is not None for name in complete_fields):
+            try:
+                frozen_evidence[regions] = FrozenRegionSetEvidence(
+                    mean_effect=effect,
+                    flip_rate=float(item["flip_rate"]),
+                    effect_ci_low=float(item["effect_ci_low"]),
+                    mean_mask_fraction=float(item["mean_mask_fraction"]),
+                )
+            except (TypeError, ValueError) as error:
+                raise ValueError("Malformed region-set evidence") from error
 
     return FrozenInfluencePolicy(
         target=str(payload.get("target", "")),
         desired_value=desired_value,
         verified_regions=verified_regions,
-        fallback_regions=(
-            verified_regions
-            if generation_regions is not None
-            else tuple(payload.get("selected_regions") or ())
-        ),
+        fallback_regions=fallback_regions,
         region_set_effects=effects,
         graph_path=str(graph_path),
         graph_sha256=sha256_file(graph_path),
+        candidate_region_sets=candidate_region_sets,
+        region_set_evidence=frozen_evidence,
     )
 
 
