@@ -59,6 +59,30 @@ def test_parser_keeps_early_stop_by_default_and_can_disable_it():
     assert disabled.disable_early_stop is True
 
 
+def test_parser_accepts_explicit_beam_region_sets():
+    args = build_arg_parser().parse_args(
+        [
+            "--template_graph",
+            "graph.json",
+            "--sample_ids",
+            "1",
+            "--region_set",
+            "mouth",
+            "--region_set",
+            "mouth+upper_lip",
+            "--classifier_path",
+            "classifier.pth",
+            "--identity_model_path",
+            "identity.ts",
+            "--output_dir",
+            "output",
+        ]
+    )
+
+    assert args.region_sets == ["mouth", "mouth+upper_lip"]
+    assert args.candidate_regions is None
+
+
 def graph_payload():
     return {
         "version": 1,

@@ -488,10 +488,11 @@ def run_interventions(args: argparse.Namespace) -> dict[str, Any]:
     target = template.intervention.concept
     desired_value = template.intervention.desired_value
     label_index = resolve_celeba_attribute_index(target)
-    requested_region_sets = canonical_region_sets(
-        args.candidate_regions,
-        max_set_size=args.max_set_size,
+    requested_region_sets = _requested_region_sets(args)
+    candidate_regions = sorted(
+        {region for regions in requested_region_sets for region in regions}
     )
+    args.candidate_regions = candidate_regions
     region_sets, region_set_aliases, region_set_signatures = (
         deduplicate_region_sets(
             requested_region_sets,
@@ -771,10 +772,7 @@ def validate_args(args: argparse.Namespace) -> None:
         raise ValueError("seeds must be non-empty and unique")
     if any(sample_id < 0 for sample_id in args.sample_ids):
         raise ValueError("sample_ids must be non-negative")
-    canonical_region_sets(
-        args.candidate_regions,
-        max_set_size=args.max_set_size,
-    )
+    _requested_region_sets(args)
     for name in (
         "template_graph",
         "classifier_path",
@@ -804,7 +802,15 @@ def build_arg_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser()
     parser.add_argument("--template_graph", required=True)
     parser.add_argument("--sample_ids", nargs="+", type=int, required=True)
-    parser.add_argument("--candidate_regions", nargs="+", required=True)
+    parser.add_argument("--candidate_regions", nargs="+", default=None)
+    parser.add_argument(
+        "--region_set",
+        dest="region_sets",
+        action="append",
+        default=None,
+        metavar="REGION+REGION",
+        help="Explicit beam candidate; repeat to evaluate multiple sets.",
+    )
     parser.add_argument("--max_set_size", type=int, default=2)
     parser.add_argument("--stop_flip_rate", type=float, default=0.96)
     parser.add_argument(
@@ -886,6 +892,43 @@ def _prompt_for_graph(path: str | Path) -> str:
             tuple(node.id for node in graph.nodes),
         )
     ).positive
+
+
+def _requested_region_sets(
+    args: argparse.Namespace,
+) -> tuple[tuple[str, ...], ...]:
+    explicit = getattr(args, "region_sets", None)
+    candidate_regions = getattr(args, "candidate_regions", None)
+    if explicit and candidate_regions:
+        raise ValueError("Use either region_set or candidate_regions, not both")
+    if explicit:
+        region_sets = tuple(
+            tuple(
+                sorted(
+                    {
+                        region.strip()
+                        for region in str(value).split("+")
+                        if region.strip()
+                    }
+                )
+            )
+            for value in explicit
+        )
+        if any(not regions for regions in region_sets):
+            raise ValueError("region_set must contain a semantic component")
+        if len(region_sets) != len(set(region_sets)):
+            raise ValueError("region_set values must be unique")
+        if any(len(regions) > args.max_set_size for regions in region_sets):
+            raise ValueError("region_set exceeds max_set_size")
+        return tuple(
+            sorted(region_sets, key=lambda regions: (len(regions), regions))
+        )
+    if not candidate_regions:
+        raise ValueError("candidate_regions or region_set is required")
+    return canonical_region_sets(
+        candidate_regions,
+        max_set_size=args.max_set_size,
+    )
 
 
 def _artifact_path(
