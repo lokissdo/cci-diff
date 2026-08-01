@@ -199,3 +199,25 @@ def test_real_schema_preserves_post_attack_selected_output(tmp_path):
         )
         for row in rows
     )
+
+
+def test_materializer_allows_unselected_rows_in_complete_candidate_roots(
+    tmp_path,
+):
+    manifest = write_selection_manifest(
+        tmp_path / "selections.json", {1: MOUTH, 2: PERIORAL}
+    )
+    roots = {
+        MOUTH: write_candidate_csv(
+            tmp_path / "mouth.csv", MOUTH, sample_ids=(1, 2, 3)
+        ),
+        PERIORAL: write_candidate_csv(
+            tmp_path / "perioral.csv", PERIORAL, sample_ids=(1, 2, 3)
+        ),
+    }
+
+    rows = materialize_adaptive_cohort(
+        manifest, roots, tmp_path / "adaptive", expected_count=2
+    )
+
+    assert {row["sample_id"] for row in rows} == {"1", "2"}

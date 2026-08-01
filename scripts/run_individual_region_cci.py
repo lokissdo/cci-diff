@@ -36,6 +36,7 @@ from cci_diff.individual_region_selection import (  # noqa: E402
 from cci_diff.post_attack import gradcam_pp_saliency  # noqa: E402
 from cci_diff.region_screening import celebamask_component_path  # noqa: E402
 from cci_diff.risk_controlled_selection import (  # noqa: E402
+    FEATURE_NAMES,
     FrozenSelectorArtifact,
     RiskControlledSelection,
     extract_candidate_feature_rows,
@@ -81,6 +82,17 @@ def generation_policy_signature(
 ) -> str:
     """Hash every generation setting that selector calibration depends on."""
 
+    external_manifest = getattr(args, "generation_policy_manifest", None)
+    if external_manifest is not None:
+        source = Path(external_manifest)
+        payload = {
+            "target": frozen_policy.target,
+            "desired_value": frozen_policy.desired_value,
+            "external_generation_policy": json.loads(
+                source.read_text(encoding="utf-8")
+            ),
+        }
+        return hashlib.sha256(_canonical_json_bytes(payload)).hexdigest()
     payload = {
         "target": frozen_policy.target,
         "desired_value": frozen_policy.desired_value,
@@ -161,18 +173,7 @@ def prepare_individual_policy(
             f"Source {sample_id} already satisfies the desired target"
         )
     saliency_array = np.asarray(saliency)
-    masks = {}
-    for region, path_value in component_paths.items():
-        path = Path(path_value)
-        if not path.is_file():
-            continue
-        with Image.open(path) as image:
-            masks[region] = np.asarray(
-                image.convert("L").resize(
-                    (saliency_array.shape[1], saliency_array.shape[0]),
-                    Image.Resampling.NEAREST,
-                )
-            )
+    masks = _load_component_masks(saliency_array, component_paths)
     if selector_artifact is None:
         selection = select_individual_region_set(
             saliency_array,
@@ -216,6 +217,25 @@ def prepare_individual_policy(
         encoding="utf-8",
     )
     return selection, graph_path, binding_path, union_path
+
+
+def _load_component_masks(
+    saliency: np.ndarray,
+    component_paths: Mapping[str, str | Path],
+) -> dict[str, np.ndarray]:
+    masks = {}
+    for region, path_value in component_paths.items():
+        path = Path(path_value)
+        if not path.is_file():
+            continue
+        with Image.open(path) as image:
+            masks[region] = np.asarray(
+                image.convert("L").resize(
+                    (saliency.shape[1], saliency.shape[0]),
+                    Image.Resampling.NEAREST,
+                )
+            )
+    return masks
 
 
 def run_individual_cci(args: argparse.Namespace) -> dict[str, Any]:
@@ -306,6 +326,7 @@ def run_individual_cci(args: argparse.Namespace) -> dict[str, Any]:
 
     selections: list[dict[str, Any]] = []
     prepared: list[dict[str, Any]] = []
+    source_feature_rows: list[dict[str, Any]] = []
     results: list[dict[str, Any]] = []
     failures = []
     attempted = 0
@@ -334,6 +355,37 @@ def run_individual_cci(args: argparse.Namespace) -> dict[str, Any]:
                     )
                 ).is_file()
             }
+            if bool(getattr(args, "source_features_only", False)):
+                if not source_requires_flip(
+                    source_probability, frozen.desired_value
+                ):
+                    raise ValueError(
+                        f"Source {sample_id} already satisfies the desired target"
+                    )
+                masks = _load_component_masks(saliency, component_paths)
+                feature_rows = extract_candidate_feature_rows(
+                    source_probability,
+                    saliency,
+                    masks,
+                    frozen,
+                )
+                for row in feature_rows:
+                    source_feature_rows.append(
+                        {
+                            "sample_id": sample_id,
+                            "source_path": str(source),
+                            "source_sha256": sha256_file(source),
+                            "source_probability": source_probability,
+                            "regions": list(row.regions),
+                            **{
+                                name: value
+                                for name, value in zip(
+                                    FEATURE_NAMES, row.values
+                                )
+                            },
+                        }
+                    )
+                continue
             policy_dir = output_dir / "policies" / f"{sample_id:05d}"
             selection, graph_path, binding_path, _ = (
                 prepare_individual_policy(
@@ -385,6 +437,52 @@ def run_individual_cci(args: argparse.Namespace) -> dict[str, Any]:
             _append_jsonl(output_dir / "failures.jsonl", failure)
             if not args.continue_on_error:
                 raise
+
+    if bool(getattr(args, "source_features_only", False)):
+        feature_path = output_dir / "selector_source_features.csv"
+        _write_rows(feature_path, source_feature_rows)
+        feature_manifest = {
+            "version": 1,
+            "artifact_type": "source_only_selector_features",
+            "sample_ids": sorted(
+                {row["sample_id"] for row in source_feature_rows}
+            ),
+            "row_count": len(source_feature_rows),
+            "candidate_region_sets": [
+                list(regions) for regions in frozen.candidate_region_sets
+            ],
+            "influence_graph_sha256": frozen.graph_sha256,
+            "feature_signature": selector_feature_signature(args, frozen),
+            "generation_policy_signature": generation_policy_signature(
+                args, frozen
+            ),
+            "classifier_sha256": sha256_file(args.classifier_path),
+            "source_features_sha256": sha256_file(feature_path),
+            "selection_performed": False,
+            "generation_invoked": False,
+            "failures": failures,
+        }
+        feature_manifest_path = output_dir / "source_feature_manifest.json"
+        feature_manifest_path.write_text(
+            json.dumps(feature_manifest, sort_keys=True, indent=2) + "\n",
+            encoding="utf-8",
+        )
+        manifest = {
+            **frozen_config,
+            "sample_ids": args.sample_ids,
+            "source_features_only": True,
+            "source_feature_row_count": len(source_feature_rows),
+            "source_features_path": str(feature_path),
+            "source_feature_manifest_path": str(feature_manifest_path),
+            "attempted_generations": 0,
+            "completed_generations": 0,
+            "failures": failures,
+        }
+        (output_dir / "individual_manifest.json").write_text(
+            json.dumps(manifest, indent=2, allow_nan=False),
+            encoding="utf-8",
+        )
+        return manifest
 
     _write_rows(output_dir / "individual_selections.csv", selections)
     _write_rows(output_dir / "adaptive_selections.csv", selections)
@@ -530,8 +628,20 @@ def validate_args(args: argparse.Namespace) -> None:
     selector_model = getattr(args, "selector_model", None)
     if selector_model is not None and not Path(selector_model).is_file():
         raise FileNotFoundError(f"selector_model not found: {selector_model}")
+    generation_manifest = getattr(args, "generation_policy_manifest", None)
+    if generation_manifest is not None and not Path(generation_manifest).is_file():
+        raise FileNotFoundError(
+            f"generation_policy_manifest not found: {generation_manifest}"
+        )
     if not Path(args.model_path).exists():
         raise FileNotFoundError(f"model_path not found: {args.model_path}")
+    if bool(getattr(args, "source_features_only", False)) and (
+        selector_model is not None
+        or bool(getattr(args, "selection_only", False))
+    ):
+        raise ValueError(
+            "source_features_only cannot be combined with selector selection"
+        )
 
 
 def _validate_selector_for_run(
@@ -590,6 +700,7 @@ def build_arg_parser() -> argparse.ArgumentParser:
     parser.add_argument("--model_path", default="checkpoints/sd2-1-base")
     parser.add_argument("--classifier_path", required=True)
     parser.add_argument("--selector_model", default=None)
+    parser.add_argument("--generation_policy_manifest", default=None)
     parser.add_argument("--identity_model_path", required=True)
     parser.add_argument("--output_dir", required=True)
     parser.add_argument("--device", default="mps")
@@ -608,6 +719,7 @@ def build_arg_parser() -> argparse.ArgumentParser:
     parser.add_argument("--discovery_manifest", default=None)
     parser.add_argument("--selection_manifest", default=None)
     parser.add_argument("--selection_only", action="store_true")
+    parser.add_argument("--source_features_only", action="store_true")
     parser.add_argument("--exploratory", action="store_true")
     parser.add_argument("--continue_on_error", action="store_true")
     parser.add_argument("--dry_run", action="store_true")

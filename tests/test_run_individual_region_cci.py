@@ -191,6 +191,56 @@ def test_source_requires_flip_uses_opposite_classifier_side():
     assert not source_requires_flip(0.9, desired_value=1)
 
 
+def test_generation_policy_signature_can_bind_external_replay_policy(tmp_path):
+    (
+        template,
+        influence,
+        image_root,
+        mask_root,
+        classifier,
+        identity,
+        model,
+    ) = make_file_tree(tmp_path)
+    policy = load_frozen_influence_policy(influence)
+    external = tmp_path / "replay_policy.json"
+    external.write_text(
+        json.dumps(
+            {
+                "variant": "A11",
+                "controller": "trust_region",
+                "post_attack": "smooth_boundary",
+            }
+        ),
+        encoding="utf-8",
+    )
+    args = Namespace(
+        generation_policy_manifest=str(external),
+        model_path=str(model),
+        template_graph=str(template),
+        seed=42,
+        num_inference_steps=35,
+        guidance_scale=5.0,
+        blending_start_percentage=0.25,
+        generation_mask_dilation=8,
+        generation_mask_feather=3.0,
+    )
+
+    first = generation_policy_signature(args, policy)
+    external.write_text(
+        json.dumps(
+            {
+                "variant": "A11",
+                "controller": "disabled",
+                "post_attack": "smooth_boundary",
+            }
+        ),
+        encoding="utf-8",
+    )
+    second = generation_policy_signature(args, policy)
+
+    assert first != second
+
+
 def test_prepare_individual_policy_materializes_selected_regions(tmp_path):
     (
         template,
@@ -480,3 +530,88 @@ def test_selection_only_writes_manifest_without_diffusion(monkeypatch, tmp_path)
     assert manifest["attempted_generations"] == 0
     assert manifest["selection_only"] is True
     assert Path(manifest["selection_manifest_path"]).is_file()
+
+
+def test_source_features_only_writes_candidate_rows_without_diffusion(
+    monkeypatch, tmp_path
+):
+    (
+        template,
+        influence,
+        image_root,
+        mask_root,
+        classifier,
+        identity,
+        model,
+    ) = make_file_tree(tmp_path)
+    args = Namespace(
+        influence_graph=str(influence),
+        template_graph=str(template),
+        sample_ids=[0],
+        coverage_threshold=0.8,
+        seed=42,
+        image_root=str(image_root),
+        mask_root=str(mask_root),
+        model_path=str(model),
+        classifier_path=str(classifier),
+        identity_model_path=str(identity),
+        output_dir=str(tmp_path / "features"),
+        device="cpu",
+        classifier_input_size=4,
+        num_inference_steps=5,
+        guidance_scale=5.0,
+        blending_start_percentage=0.25,
+        generation_mask_dilation=0,
+        generation_mask_feather=3.0,
+        python_executable=".venv-ml/bin/python",
+        continue_on_error=False,
+        dry_run=False,
+        source_features_only=True,
+        selection_only=False,
+        selector_model=None,
+        discovery_manifest=None,
+        exploratory=False,
+    )
+    monkeypatch.setattr(
+        "scripts.run_individual_region_cci.load_celeba_resnet50",
+        lambda *args, **kwargs: object(),
+    )
+    monkeypatch.setattr(
+        "scripts.run_individual_region_cci._compute_source_saliency",
+        lambda *args, **kwargs: (
+            0.9,
+            np.array(
+                [
+                    [0.0, 0.0, 0.0, 0.0],
+                    [0.0, 1.0, 0.0, 0.0],
+                    [0.0, 0.2, 0.0, 0.0],
+                    [0.0, 0.0, 0.0, 0.0],
+                ]
+            ),
+        ),
+    )
+    monkeypatch.setattr(
+        "scripts.run_individual_region_cci.subprocess.run",
+        lambda *args, **kwargs: pytest.fail("diffusion must not run"),
+    )
+
+    manifest = run_individual_cci(args)
+
+    rows = list(
+        __import__("csv").DictReader(
+            (tmp_path / "features/selector_source_features.csv").open()
+        )
+    )
+    assert len(rows) == 2
+    assert {tuple(json.loads(row["regions"])) for row in rows} == {
+        ("mouth",),
+        ("lower_lip", "mouth"),
+    }
+    assert set(FEATURE_NAMES).issubset(rows[0])
+    assert "output_path" not in rows[0]
+    assert manifest["source_features_only"] is True
+    assert manifest["source_feature_row_count"] == 2
+    feature_manifest = json.loads(
+        (tmp_path / "features/source_feature_manifest.json").read_text()
+    )
+    assert len(feature_manifest["generation_policy_signature"]) == 64

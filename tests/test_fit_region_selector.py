@@ -4,7 +4,10 @@ from pathlib import Path
 import pytest
 
 from cci_diff.risk_controlled_selection import FEATURE_NAMES
-from scripts.fit_region_selector import fit_region_selector
+from scripts.fit_region_selector import (
+    fit_region_selector,
+    provenance_from_manifests,
+)
 
 
 MOUTH = ("mouth",)
@@ -115,6 +118,30 @@ def test_fit_rejects_any_pairwise_cohort_overlap(tmp_path):
             discovery_ids={0},
             evaluation_ids={200, 201},
         )
+
+
+def test_provenance_can_be_built_from_source_and_split_manifests(tmp_path):
+    source = tmp_path / "source_manifest.json"
+    source.write_text(
+        json.dumps(
+            {
+                "feature_signature": "b" * 64,
+                "classifier_sha256": "c" * 64,
+                "generation_policy_signature": "d" * 64,
+            }
+        ),
+        encoding="utf-8",
+    )
+    split = tmp_path / "split_manifest.json"
+    split.write_text(json.dumps({"cohorts": {"fit": [1]}}), encoding="utf-8")
+
+    result = provenance_from_manifests(source, split)
+
+    assert result["feature_signature"] == "b" * 64
+    assert result["classifier_sha256"] == "c" * 64
+    assert result["generation_policy_signature"] == "d" * 64
+    assert len(result["source_feature_manifest_sha256"]) == 64
+    assert len(result["split_manifest_sha256"]) == 64
 
 
 def test_fit_rejects_incomplete_candidate_pairs(tmp_path):

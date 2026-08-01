@@ -399,6 +399,39 @@ def asdict_thresholds(thresholds: SafeSuccessThresholds) -> dict[str, float]:
     }
 
 
+def provenance_from_manifests(
+    source_feature_manifest: str | Path,
+    split_manifest: str | Path,
+) -> dict[str, Any]:
+    """Build fitting provenance from already-frozen source/split artifacts."""
+
+    source_path = Path(source_feature_manifest)
+    split_path = Path(split_manifest)
+    source = json.loads(source_path.read_text(encoding="utf-8"))
+    json.loads(split_path.read_text(encoding="utf-8"))
+    required = (
+        "feature_signature",
+        "classifier_sha256",
+        "generation_policy_signature",
+    )
+    missing = [name for name in required if name not in source]
+    if missing:
+        raise ValueError(
+            f"source feature manifest lacks provenance: {missing}"
+        )
+    return {
+        name: str(source[name]) for name in required
+    } | {
+        "source_feature_manifest_sha256": hashlib.sha256(
+            source_path.read_bytes()
+        ).hexdigest(),
+        "split_manifest_sha256": hashlib.sha256(
+            split_path.read_bytes()
+        ).hexdigest(),
+        "software_versions": {"numpy": np.__version__},
+    }
+
+
 def _read_csv(path: str | Path) -> list[dict[str, str]]:
     with Path(path).open(newline="", encoding="utf-8") as handle:
         return list(csv.DictReader(handle))
@@ -447,7 +480,9 @@ def build_arg_parser() -> argparse.ArgumentParser:
     parser.add_argument("--influence_graph", required=True)
     parser.add_argument("--source_features", required=True)
     parser.add_argument("--development_outcomes", required=True)
-    parser.add_argument("--provenance", required=True)
+    parser.add_argument("--provenance", default=None)
+    parser.add_argument("--source_feature_manifest", default=None)
+    parser.add_argument("--split_manifest", default=None)
     parser.add_argument("--discovery_ids", default=None)
     parser.add_argument("--evaluation_ids", default=None)
     parser.add_argument("--candidate_family", default=None)
@@ -457,7 +492,23 @@ def build_arg_parser() -> argparse.ArgumentParser:
 
 def main() -> int:
     args = build_arg_parser().parse_args()
-    provenance_payload = json.loads(Path(args.provenance).read_text(encoding="utf-8"))
+    if args.provenance is not None:
+        if args.source_feature_manifest is not None:
+            raise ValueError(
+                "use either provenance or source_feature_manifest, not both"
+            )
+        provenance_payload = json.loads(
+            Path(args.provenance).read_text(encoding="utf-8")
+        )
+    else:
+        if args.source_feature_manifest is None or args.split_manifest is None:
+            raise ValueError(
+                "source_feature_manifest and split_manifest are required "
+                "when provenance is omitted"
+            )
+        provenance_payload = provenance_from_manifests(
+            args.source_feature_manifest, args.split_manifest
+        )
     candidate_family = None
     if args.candidate_family:
         candidate_family = json.loads(

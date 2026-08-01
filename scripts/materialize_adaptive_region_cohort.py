@@ -237,6 +237,7 @@ def materialize_adaptive_cohort(
 
     indexed = {}
     common_fields = None
+    available_keys = None
     expected_keys = {
         (sample_id, variant)
         for sample_id in decision_ids
@@ -244,14 +245,18 @@ def materialize_adaptive_cohort(
     }
     for regions, path in normalized_paths.items():
         index, fields = _read_candidate_rows(path, regions, variants)
-        if set(index) != expected_keys:
+        if not expected_keys.issubset(index):
             missing = sorted(expected_keys - set(index))
-            extra = sorted(set(index) - expected_keys)
             missing_variants = sorted({variant for _, variant in missing})
             raise ValueError(
                 f"candidate results for {regions} do not match IDs/variants; "
-                f"missing variants={missing_variants}, missing={missing[:5]}, "
-                f"extra={extra[:5]}"
+                f"missing variants={missing_variants}, missing={missing[:5]}"
+            )
+        if available_keys is None:
+            available_keys = set(index)
+        elif set(index) != available_keys:
+            raise ValueError(
+                "candidate result roots must contain identical IDs and variants"
             )
         if common_fields is None:
             common_fields = fields
