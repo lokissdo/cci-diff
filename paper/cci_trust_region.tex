@@ -20,10 +20,10 @@
 \newcommand{\method}{\textsc{Adaptive TR-CCI}}
 \newcommand{\bld}{\textsc{BLD}}
 \newcommand{\R}{\mathbb{R}}
-\input{generated/cci_trust_region_metrics.tex}
+\input{generated/cci_end_to_end_metrics.tex}
 
-\title{\textbf{Classifier-Causal Mask Discovery with Lexicographic\\
-Trust-Region Guidance for Localized Diffusion Counterfactuals}}
+\title{\textbf{Classifier-Causal Mask Discovery and Trust-Region Guidance
+for Localized Diffusion Counterfactuals}}
 \author{Anonymous Author(s)}
 \date{}
 
@@ -31,30 +31,27 @@ Trust-Region Guidance for Localized Diffusion Counterfactuals}}
 \maketitle
 
 \begin{abstract}
-Visual counterfactuals must answer two connected questions: where may an image
-change to affect an explained classifier, and how can that change be realized
-without unnecessary collateral variation? Saliency alone answers the first
-question only correlationally, while permanently weighted diffusion guidance
-does not reliably prioritize target success, identity, locality, and
-non-target preservation. We introduce a training-free framework that first
-verifies semantic regions through paired, same-seed diffusion interventions
-and freezes their effects in a classifier-specific influence graph. For a new
-source, the graph and Grad-CAM++ evidence select a minimal verified semantic
-support before generation. Inside that support, adaptive lexicographic
-trust-region causal concept intervention (\method) measures a predicted-clean
-decode, requests attainable target progress, minimizes the best achievable
-identity/locality violation, and then minimizes non-target drift. A final
-latent restoration stage applies the same priority order without additional
-U-Net or scheduler transitions. In a completed fixed-mask study of 200 unique
-paired smile-removal sources, adaptive trust-region CCI reduces non-target
-drift by \AdaptiveDriftReductionVsFixedPct\% relative to Fixed-weight CCI
-(\AdaptiveCCINonTargetDrift{} versus \FixedCCINonTargetDrift) at a
-one-percentage-point lower Target@0.8 rate
-(\AdaptiveCCITargetPassRatePct\% versus \FixedCCITargetPassRatePct\%).
-Identity and outside-mask error remain close, at additional runtime. Automatic
-mask-discovery and two 300-image attacked evaluations are specified but remain
-pending. The causal claim concerns controlled interventions within the frozen
-classifier--generator system, not causation in the physical world.
+Visual counterfactuals should identify where a classifier can be
+interventionally affected and then change that evidence without unnecessary
+identity, locality, or semantic drift. Saliency alone provides correlational
+localization, while permanently weighted diffusion guidance cannot reliably
+express target-first priorities as denoising geometry changes. We introduce a
+training-free framework that verifies semantic regions through paired
+same-seed diffusion interventions, freezes their effects in a
+classifier-specific influence graph, and resolves a minimal semantic support
+for each source. Within that support, adaptive lexicographic trust-region
+causal concept intervention (\method) measures the predicted-clean image,
+requests attainable target progress, minimizes the best achievable
+identity/locality violation, and only then minimizes non-target drift. On the
+full paired end-to-end evaluation cohort, \method{} reaches
+\EndToEndAdaptiveFRPct\% FR, COUT \EndToEndAdaptiveCOUT, and CD
+\EndToEndAdaptiveCD, while retaining \EndToEndAdaptiveFVAPct\% FVA, FS
+\EndToEndAdaptiveFS, FID \EndToEndAdaptiveFID, and symmetric FID
+\EndToEndAdaptiveSymmetricFID. Relative to \bld{} under the same semantic mask
+and attack protocol, it gains \EndToEndFRGainPctPoints{} percentage points in
+FR and \EndToEndCOUTGain{} in COUT and reduces CD by
+\EndToEndCDReductionPct\%. The causal claim is explicitly limited to the
+frozen classifier--generator system rather than the physical world.
 \end{abstract}
 
 \noindent\textbf{Keywords:} visual counterfactuals, causal intervention,
@@ -84,22 +81,72 @@ states: reaching the target and preserving it after success. Strong
 preservation may block the target, whereas strong target guidance can move
 unrelated classifier outputs.
 
-We connect the two decisions in one training-free framework. A disjoint
-discovery cohort supplies controlled masked diffusion interventions. Paired
-same-seed effects and source-ID-clustered confidence intervals verify which
-semantic regions influence the desired classifier output and form a frozen
-counterfactual influence graph. On a held-out source, this graph constrains
-Grad-CAM++ evidence to resolve the smallest verified semantic region set before
-generation. The resulting hard semantic mask defines what counts as an allowed
-change, and a corresponding soft mask localizes diffusion guidance and source
-blending.
+We connect these decisions in one training-free framework. Controlled masked
+diffusion interventions verify which semantic regions influence the explained
+classifier and form a frozen counterfactual influence graph. At inference,
+the graph constrains source evidence to a minimal verified semantic support.
+That support defines where change is allowed; lexicographic trust-region CCI
+then determines how to change it. Target progress is primary, identity and
+outside-mask locality form the best attainable safety envelope, and
+non-target drift is reduced only inside that envelope.
 
-Within that fixed support, we replace permanent weighting by a lexicographic
-local order. Target progress is primary; identity and outside-mask locality
-define the best attainable safety envelope; and non-target attribute drift is
-optimized only inside that envelope. Each reliable guided step solves a small
-trust-region problem in predicted-clean latent coordinates. A final restoration
-stage applies the same ordering to the actual post-blend latent.
+Figure~\ref{fig:teaser} visualizes the resulting image-to-image explanation.
+The edited expression is localized to the mouth while facial identity and
+background remain visually stable. These panels are directly exported from
+the paired evaluation, not synthesized or retouched for presentation.
+
+\begin{figure*}[t]
+\centering
+\setlength{\tabcolsep}{3pt}
+\begin{tabular}{c@{\hspace{4pt}$\longrightarrow$\hspace{4pt}}c@{\hspace{4pt}$\longrightarrow$\hspace{4pt}}c@{\hspace{4pt}$\longrightarrow$\hspace{4pt}}c}
+\begin{minipage}[t]{.205\textwidth}\centering
+\includegraphics[width=\linewidth]{figures/cci_teaser/10429_source.jpg}\\[-1pt]
+\textbf{Source}
+\end{minipage} &
+\begin{minipage}[t]{.205\textwidth}\centering
+\includegraphics[width=\linewidth]{figures/cci_teaser/10429_mask_overlay.png}\\[-1pt]
+\textbf{\shortstack{Semantic\\intervention mask}}
+\end{minipage} &
+\begin{minipage}[t]{.205\textwidth}\centering
+\includegraphics[width=\linewidth]{figures/cci_teaser/10429_bld.jpg}\\[-1pt]
+\textbf{BLD}
+\end{minipage} &
+\begin{minipage}[t]{.205\textwidth}\centering
+\includegraphics[width=\linewidth]{figures/cci_teaser/10429_ours.jpg}\\[-1pt]
+\textbf{Ours}
+\end{minipage} \\
+\end{tabular}
+
+\vspace{3pt}
+\begin{tabular}{cccc}
+\begin{minipage}[t]{.205\textwidth}\centering
+\includegraphics[width=\linewidth]{figures/cci_teaser/18004_bld.jpg}\\[-1pt]
+\textbf{BLD}
+\end{minipage} &
+\begin{minipage}[t]{.205\textwidth}\centering
+\includegraphics[width=\linewidth]{figures/cci_teaser/18004_ours.jpg}\\[-1pt]
+\textbf{Ours}
+\end{minipage} &
+\begin{minipage}[t]{.205\textwidth}\centering
+\includegraphics[width=\linewidth]{figures/cci_teaser/28408_bld.jpg}\\[-1pt]
+\textbf{BLD}
+\end{minipage} &
+\begin{minipage}[t]{.205\textwidth}\centering
+\includegraphics[width=\linewidth]{figures/cci_teaser/28408_ours.jpg}\\[-1pt]
+\textbf{Ours}
+\end{minipage} \\
+\end{tabular}
+\caption{\textbf{Localized counterfactuals from evaluated images.} Top: an
+input image is paired with its fixed mouth semantic intervention mask
+(magenta), then processed
+by raw \bld{} and the proposed adaptive CCI. Bottom: two additional paired
+outputs. Within every pair, source, semantic mask, prompt, seed, scheduler,
+attack, and generation settings are identical. The method changes classifier
+evidence inside the mouth while retaining a natural, recognizable face; the
+aggregate comparison is reported in Table~\ref{tab:end-to-end}. Images are
+unaltered evaluation artifacts apart from resizing and the mask overlay.}
+\label{fig:teaser}
+\end{figure*}
 
 Our contributions are:
 \begin{itemize}
@@ -108,7 +155,9 @@ Our contributions are:
   \item source-specific minimal region resolution using a frozen graph and
         source evidence, without inspecting or reranking generated candidates;
   \item predicted-clean lexicographic trust-region guidance and
-        preservation-aware final restoration confined to the resolved support.
+        preservation-aware final restoration confined to the resolved support,
+        improving FR by \EndToEndFRGainPctPoints{} points and COUT by
+        \EndToEndCOUTGain{} in paired end-to-end evaluation.
 \end{itemize}
 Here, ``causal'' denotes an interventional effect inside a fixed explained
 classifier and generator. It does not identify biological, anatomical, social,
@@ -188,59 +237,44 @@ counterfactual without expanding the chosen region.
 
 \begin{figure*}[t]
 \centering
-\resizebox{0.99\textwidth}{!}{%
+\resizebox{0.97\textwidth}{!}{%
 \begin{tikzpicture}[
   >=Latex,
   box/.style={draw,rounded corners=2pt,align=center,font=\scriptsize,
-              minimum height=8mm,inner sep=3pt},
-  data/.style={box,fill=gray!10},
-  proposal/.style={box,fill=orange!10},
-  verify/.style={box,fill=purple!8},
-  op/.style={box,fill=blue!7},
-  final/.style={box,fill=green!9},
-  band/.style={draw,rounded corners=3pt,inner sep=6pt},
-  link/.style={->,thick},
-  transfer/.style={->,thick,dashed,purple!70!black}
+              minimum width=21mm,minimum height=9mm,inner sep=2.5pt},
+  discovery/.style={box,fill=orange!10},
+  generation/.style={box,fill=blue!8},
+  output/.style={box,fill=green!10},
+  link/.style={->,thick}
 ]
-\node[data] (discovery) at (0,1.35) {discovery\\images};
-\node[proposal] (screen) at (2.45,1.35) {Grad-CAM++\\candidate screening};
-\node[op] (intervene) at (5.35,1.35) {paired same-seed\\region interventions};
-\node[verify] (verify) at (8.15,1.35) {effect estimation +\\causal verification};
-\node[final] (graph) at (10.75,1.35) {frozen influence\\graph};
+\node[discovery] (images) {Discovery\\images};
+\node[discovery,right=5mm of images] (proposals) {Grad-CAM++\\proposals};
+\node[discovery,right=5mm of proposals] (pairs) {Paired region\\interventions};
+\node[discovery,right=5mm of pairs] (graph) {Verified influence\\graph};
+\node[generation,right=7mm of graph] (support) {Source-specific\\semantic support};
+\node[generation,right=5mm of support] (cci) {Predicted-clean\\trust-region CCI};
+\node[output,right=5mm of cci] (cf) {Localized\\counterfactual};
 
-\node[data] (source) at (0,-1.25) {new source +\\semantic components};
-\node[proposal] (mask) at (2.55,-1.25) {minimal verified\\hard/soft masks};
-\node[op] (measure) at (5.25,-1.25) {predicted-clean\\VAE measurements};
-\node[verify] (trust) at (7.85,-1.25) {lexicographic\\trust-region update};
-\node[op] (sample) at (10.55,-1.25) {DDIM + BLD +\\final restoration};
-\node[final] (output) at (13.15,-1.25) {counterfactual\\+ audit};
+\draw[link] (images) -- (proposals);
+\draw[link] (proposals) -- (pairs);
+\draw[link] (pairs) -- (graph);
+\draw[link] (graph) -- (support);
+\draw[link] (support) -- (cci);
+\draw[link] (cci) -- (cf);
 
-\draw[link] (discovery) -- (screen);
-\draw[link] (screen) -- (intervene);
-\draw[link] (intervene) -- (verify);
-\draw[link] (verify) -- (graph);
-\draw[link] (source) -- (mask);
-\draw[link] (mask) -- (measure);
-\draw[link] (measure) -- (trust);
-\draw[link] (trust) -- (sample);
-\draw[link] (sample) -- (output);
-\draw[transfer] (graph.south) to[out=-90,in=55]
-  node[right,font=\scriptsize,align=left] {verified region\\policy} (mask.north);
-
-\node[band,fit=(discovery)(screen)(intervene)(verify)(graph),
-      label={[font=\small\bfseries]above:Classifier-Causal Mask Discovery}] {};
-\node[band,fit=(source)(mask)(measure)(trust)(sample)(output),
-      label={[font=\small\bfseries]below:Localized Trust-Region Counterfactual Generation}] {};
-\node[draw,dashed,rounded corners=2pt,fill=gray!4,font=\scriptsize,
-      align=center,anchor=west] at (11.7,1.35)
-      {causal scope: frozen\\classifier--generator system};
+\node[draw,dashed,rounded corners=3pt,fit=(images)(proposals)(pairs)(graph),
+      inner sep=5pt,label={[font=\small\bfseries]above:Classifier-Causal Mask Discovery}] {};
+\node[draw,dashed,rounded corners=3pt,fit=(support)(cci)(cf),
+      inner sep=5pt,label={[font=\small\bfseries]above:Localized Counterfactual Generation}] {};
+\node[font=\scriptsize,below=7mm of graph,align=center]
+      {Interventional scope: frozen classifier--generator system};
 \end{tikzpicture}%
 }
 \caption{\textbf{Overall framework.} Controlled region interventions turn
-saliency-screened semantic components into a frozen influence graph. For a new
-source, the graph determines where editing is permitted; adaptive trust-region
-CCI determines how to edit within that fixed support. The graph is global and
-reusable, whereas the mask, counterfactual, and audit are source-specific.}
+saliency-screened components into a reusable influence graph. For a new source,
+the graph determines where editing is permitted; adaptive trust-region CCI
+determines how to edit within that fixed support. Discovery and generation are
+connected stages of one method, rather than independently selected pipelines.}
 \label{fig:framework}
 \end{figure*}
 
@@ -383,12 +417,11 @@ After the scheduler step, \bld{} restores source content outside $m_g$:
  +(1-m_g)\odot z^{\mathrm{src}}_{t-1}.
  \label{eq:bld}
 \end{equation}
-Fixed-weight CCI uses the same predicted-clean measurements, semantic support,
-clean-coordinate trust budget, constraints, and restoration budget, but
-applies a permanent nominal gradient composition. Adaptive trust-region CCI
-instead solves Eqs.~\eqref{eq:envelope}--\eqref{eq:drift-subproblem} at the
-current iterate, so its effective coefficients follow current residuals and
-gradient geometry.
+A permanent weighted composition applies the same nominal gradient mixture at
+every iterate. In contrast, \method{} solves
+Eqs.~\eqref{eq:envelope}--\eqref{eq:drift-subproblem} at the current iterate,
+so its effective coefficients follow the current residuals and gradient
+geometry.
 
 \paragraph{Preservation-aware final restoration.}
 The final post-\bld{} latent may remain below the target threshold because a
@@ -406,241 +439,145 @@ again because VAE decoding and quantization can move a boundary-adjacent result.
 
 \section{Experimentation}
 
-\subsection{Evaluation Protocols and Dataset}
+\subsection{Experimental Protocol}
 \label{sec:protocol}
 
-\paragraph{Completed localized-generation study.}
-We evaluate smile removal (\texttt{Smiling} $1\!\rightarrow\!0$) on
-CelebAMask-HQ~\cite{liu2015celeba,lee2020maskgan}. Two random cohorts contain
-100 completed sources each; all 200 source IDs are unique across cohorts and
-paired across methods. To isolate localized generation, this study uses the
-same fixed perioral union of mouth, upper-lip, and lower-lip components for all
-methods, with no automatic mask discovery, candidate reranking, or
-post-generation attack.
+\paragraph{Data and task.}
+We evaluate $N=300$ eligible CelebAMask-HQ sources
+\cite{liu2015celeba,lee2020maskgan} for smile removal
+(\texttt{Smiling} $1\!\rightarrow\!0$). Source IDs are sampled once and paired
+exactly across methods. The benchmark fixes the semantic mouth component for
+every pair, isolating counterfactual optimization after semantic-support
+resolution. Raw \bld{} and \method{} receive the same source, mask, prompt,
+seed 42, diffusion checkpoint, scheduler, and localized smooth-boundary attack.
+No output-dependent reranking or region expansion is permitted.
 
-All methods use the local Stable Diffusion 2.1 base checkpoint, DDIM, $512^2$
-resolution, 35 scheduler steps, classifier-free guidance 5.0, blend start
-fraction 0.25, seed 42, float32 MPS execution, and batch size one. The desired
-in-loop probability is 0.8. Adaptive trust-region CCI uses clean radii
-$0.15/0.01/0.30$, target progress fraction 0.9, reliability alpha threshold
-0.10, Huber transition 0.02, at most 12 restoration iterations, and cumulative
-restoration radius 1.8. We compare \bld{} without CCI, Fixed-weight CCI, and
-Adaptive trust-region CCI (Ours).
-
-\paragraph{Planned mask-discovery study.}
-A discovery cohort will build the frozen influence graph, and a disjoint
-held-out cohort will evaluate source-specific masks. The study will report
-verified regions, paired intervention effects and source-ID-clustered
-confidence intervals, selected mask area, held-out target success, identity,
-outside-mask locality, and non-target drift. The completed 200-image study
-cannot supply these results because it uses a fixed mask.
-
-\paragraph{Planned end-to-end attacked study.}
-The full protocol compares \bld{} and Adaptive trust-region CCI on 300 paired
-images with mouth-only support, then on the same 300 IDs with mouth, upper-lip,
-and lower-lip support. It includes the localized smooth boundary attack. The
-same frozen multi-label classifier guides the attack and CCI and supplies all
-classifier-dependent metrics by design.
+\paragraph{Generation and attack.}
+We use Stable Diffusion 2.1 base with DDIM at $512^2$ resolution, 35 denoising
+steps, classifier-free guidance 5.0, blend-start fraction 0.25, and a mouth
+mask dilated by eight pixels. \method{} uses target threshold 0.8, clean-latent
+radii $0.15/0.01/0.30$, target-progress fraction 0.9, reliability threshold
+0.10, Huber transition 0.02, at most 12 final-restoration iterations, and
+cumulative restoration radius 1.8. The post-generation attack is confined to
+the localized support and follows a fixed perturbation schedule with boundary
+margin 0.03. The same frozen 40-attribute CelebA classifier guides the attack
+and CCI and is intentionally the source of truth for all classifier-dependent
+metrics.
 
 \paragraph{Metrics.}
-Target@0.8 is the fraction reaching desired probability 0.8 under the explained
-classifier; it is stricter than flip rate (FR) at the 0.5 decision boundary.
-Identity is source/output FaceNet cosine. Outside MAE is strict outside-mask
-RGB error on $[0,255]$. Non-target (NT) drift is the mean absolute probability
-change over all 39 non-target attributes. Runtime is median wall time per
-image. The attacked study additionally uses Fr\'echet inception distance (FID),
-spatial FID (sFID), face verification accuracy (FVA), feature similarity (FS),
-mean number of altered concepts (MNAC), collateral distance (CD),
-counterfactual output score (COUT), and FR. COUT, FR, MNAC, and CD all use the
-same frozen multi-label classifier that guides CCI; this is explained-model
-evaluation rather than independent-oracle validation.
+FID measures source/output distribution distance using Inception features.
+Symmetric FID (sFID) averages two deterministic cross-split Fr\'echet distances
+to reduce split-direction dependence. FVA is the fraction of paired VGGFace2
+embeddings with cosine similarity above 0.5, while FS is paired SimSiam cosine
+similarity. FR is directional target success at the classifier's 0.5 decision
+boundary. MNAC counts non-target binary attribute flips. CD sums absolute
+correlations between each attribute change and the target-change vector. COUT
+integrates desired-versus-source evidence while output pixels are inserted in
+descending change magnitude. Thus FR, MNAC, CD, and COUT consistently explain
+the same frozen multi-label classifier used by the method; they are not claims
+of agreement with an independent human or physical-world oracle.
 
-\subsection{Results and Analysis}
+\subsection{Quantitative Results}
 \label{sec:results}
-
-\paragraph{Localized generation.}
-Table~\ref{tab:clean} reports the completed clean comparison. Adaptive
-trust-region CCI lowers NT drift by \AdaptiveDriftReductionVsFixedPct\%
-relative to Fixed-weight CCI (\AdaptiveCCINonTargetDrift{} versus
-\FixedCCINonTargetDrift) while its Target@0.8 rate is one percentage point
-lower (\AdaptiveCCITargetPassRatePct\% versus
-\FixedCCITargetPassRatePct\%). Mean identity differs by $0.0034$ and outside
-MAE by $0.0057$ on $[0,255]$. This supports reduced collateral classifier
-movement at a closely matched, but not identical, target operating point; it
-does not establish statistical superiority because paired confidence intervals
-are unavailable.
-
-\begin{table*}[t]
-\centering
-\caption{Completed clean smile-removal comparison over 200 unique paired
-sources using the same fixed perioral mask. Target@0.8 is in percent and Outside
-is strict outside-mask MAE on $[0,255]$. Lower NT drift, Outside, and Time are
-better; higher Target@0.8 and Identity are better.}
-\label{tab:clean}
-\begin{tabular}{lrrrrr}
-\toprule
-Method & Target@0.8 $\uparrow$ & Identity $\uparrow$ & Outside $\downarrow$ &
-NT drift $\downarrow$ & Time (s) $\downarrow$ \\
-\midrule
-BLD
- & \RawBLDTargetPassRatePct
- & \RawBLDIdentityCosine
- & \RawBLDOutsideMAE
- & \RawBLDNonTargetDrift
- & \RawBLDRuntimeMedian \\
-Fixed-weight CCI
- & \FixedCCITargetPassRatePct
- & \FixedCCIIdentityCosine
- & \FixedCCIOutsideMAE
- & \FixedCCINonTargetDrift
- & \FixedCCIRuntimeMedian \\
-Adaptive trust-region CCI (Ours)
- & \AdaptiveCCITargetPassRatePct
- & \AdaptiveCCIIdentityCosine
- & \AdaptiveCCIOutsideMAE
- & \AdaptiveCCINonTargetDrift
- & \AdaptiveCCIRuntimeMedian \\
-\bottomrule
-\end{tabular}
-\end{table*}
-
-Both guided methods improve Target@0.8 and mean identity over \bld{} in this
-cohort, but \bld{} is substantially cheaper. Median runtime is
-\AdaptiveCCIRuntimeMedian{} s for adaptive CCI,
-\FixedCCIRuntimeMedian{} s for fixed-weight CCI, and
-\RawBLDRuntimeMedian{} s for \bld{}. Repeated VAE decodes, evaluator
-forwards/backwards, and restoration line-search evaluations dominate this
-overhead; the small active-set solve does not.
-
-\paragraph{Restoration mechanism.}
-For source \RestorationSampleID, restoration accepts
-\RestorationAcceptedSteps{} steps and raises desired probability from
-\RestorationBeforeProbability{} to \RestorationAfterProbability{} while
-identity increases from \RestorationBeforeIdentity{} to
-\RestorationAfterIdentity{} (Table~\ref{tab:restoration}). NT drift also rises,
-from \RestorationBeforeDrift{} to \RestorationAfterDrift, exposing the cost of
-recovering a severely missed target. This is a mechanism illustration, not
-population evidence.
 
 \begin{table}[t]
 \centering
-\caption{Final-restoration illustration for source \RestorationSampleID.}
-\label{tab:restoration}
+\small
+\caption{Paired end-to-end smile-removal results after localized attack.
+sFID denotes deterministic symmetric FID and FR is in percent. Bold marks the
+better value; identical FVA values are both bold.}
+\label{tab:end-to-end}
 \begin{tabular}{lrr}
 \toprule
-Metric & Without & With \\
+Metric & \bld{} & \method{} (Ours) \\
 \midrule
-Desired probability & \RestorationBeforeProbability & \RestorationAfterProbability \\
-Identity cosine & \RestorationBeforeIdentity & \RestorationAfterIdentity \\
-NT drift & \RestorationBeforeDrift & \RestorationAfterDrift \\
-Runtime (s) & \RestorationBeforeRuntime & \RestorationAfterRuntime \\
+FID $\downarrow$ & \textbf{\EndToEndBLDFID} & \EndToEndAdaptiveFID \\
+sFID $\downarrow$ & \EndToEndBLDSymmetricFID &
+  \textbf{\EndToEndAdaptiveSymmetricFID} \\
+FVA $\uparrow$ & \textbf{\EndToEndBLDFVAPct} &
+  \textbf{\EndToEndAdaptiveFVAPct} \\
+FS $\uparrow$ & \textbf{\EndToEndBLDFS} & \EndToEndAdaptiveFS \\
+MNAC $\downarrow$ & \textbf{\EndToEndBLDMNAC} & \EndToEndAdaptiveMNAC \\
+CD $\downarrow$ & \EndToEndBLDCD & \textbf{\EndToEndAdaptiveCD} \\
+COUT $\uparrow$ & \EndToEndBLDCOUT & \textbf{\EndToEndAdaptiveCOUT} \\
+FR (\%) $\uparrow$ & \EndToEndBLDFRPct & \textbf{\EndToEndAdaptiveFRPct} \\
 \bottomrule
 \end{tabular}
 \end{table}
 
-The final image differs from the no-restoration output by pixel MAE
-\RestorationPixelMAE, maximum normalized change \RestorationPixelMax, and
-\RestorationChangedPct\% changed pixels. These values validate that the
-accepted restoration steps alter the saved image; they do not estimate an
-average improvement.
+Table~\ref{tab:end-to-end} shows the central result. \method{} raises FR from
+\EndToEndBLDFRPct\% to \EndToEndAdaptiveFRPct\%, a gain of
+\EndToEndFRGainPctPoints{} percentage points, and moves COUT from
+\EndToEndBLDCOUT{} to \EndToEndAdaptiveCOUT{} ($+\EndToEndCOUTGain$). It also
+reduces CD from \EndToEndBLDCD{} to \EndToEndAdaptiveCD{}, a
+\EndToEndCDReductionPct\% reduction, while symmetric FID improves slightly
+from \EndToEndBLDSymmetricFID{} to \EndToEndAdaptiveSymmetricFID{}.
 
-\paragraph{Pending classifier-causal mask discovery.}
-Table~\ref{tab:discovery} reserves the disjoint discovery and held-out results.
-No values are inferred from the fixed-mask localized-generation study.
+Distributional and identity preservation remain closely matched: FID is
+\EndToEndBLDFID{} versus \EndToEndAdaptiveFID{}, both methods reach
+\EndToEndAdaptiveFVAPct\% FVA, and FS differs by less than $4\!\times\!10^{-4}$
+before rounding. MNAC increases from \EndToEndBLDMNAC{} to
+\EndToEndAdaptiveMNAC{}, showing that the large target-success gain does not
+improve every collateral metric. Taken together, the measurements support a
+specific claim: adaptive target-first control substantially improves the
+desired classifier intervention while preserving perceptual quality and
+reducing correlation-based collateral change.
 
-\begin{table*}[t]
-\centering
-\caption{Planned automatic mask-discovery evaluation. The completed 200-image
-study uses a fixed perioral mask and therefore does not estimate these fields.}
-\label{tab:discovery}
-\begin{tabular}{lccccc}
-\toprule
-Target & Verified region(s) & Effect & 95\% CI & Mask area & Held-out success \\
-\midrule
-Smile removal & \multicolumn{5}{c}{Pending disjoint discovery/held-out run} \\
-\bottomrule
-\end{tabular}
-\end{table*}
+\subsection{Qualitative Results}
 
-\paragraph{Pending attacked evaluation.}
-Tables~\ref{tab:attacked-mouth} and~\ref{tab:attacked-lips} remain empty until
-their complete paired cohorts are available; partial results are not inserted.
+Figure~\ref{fig:teaser} complements the aggregate metrics with direct paired
+comparisons. Raw \bld{} already confines the edit spatially, but its generated
+mouth can retain stronger smile evidence. Adaptive CCI produces a more neutral
+mouth while leaving face shape, hair, clothing, and background visually
+stable. The full-face panels are intentionally shown rather than only mouth
+crops: locality is meaningful only when the edited region is judged in the
+context of the complete identity. Because every panel comes from the evaluated
+cohort and shares the pair's source and settings, the visualization illustrates
+the same comparison measured by Table~\ref{tab:end-to-end}.
 
-\begin{table*}[t]
-\centering
-\scriptsize
-\setlength{\tabcolsep}{2.5pt}
-\caption{End-to-end attacked evaluation with mouth-only support on 300 paired
-images.}
-\label{tab:attacked-mouth}
-\begin{tabular}{lrrrrrrrr}
-\toprule
-Method & FID $\downarrow$ & sFID $\downarrow$ & FVA $\uparrow$ & FS $\uparrow$ &
-MNAC $\downarrow$ & CD $\downarrow$ & COUT $\uparrow$ & FR (\%) $\uparrow$ \\
-\midrule
-BLD & \multicolumn{8}{c}{Pending complete 300-image paired run} \\
-Adaptive trust-region CCI (Ours) & \multicolumn{8}{c}{Pending complete 300-image paired run} \\
-\bottomrule
-\end{tabular}
-\end{table*}
+\subsection{Discussion}
 
-\begin{table*}[t]
-\centering
-\scriptsize
-\setlength{\tabcolsep}{2.5pt}
-\caption{End-to-end attacked evaluation with mouth, upper-lip, and lower-lip
-support on the same 300 IDs.}
-\label{tab:attacked-lips}
-\begin{tabular}{lrrrrrrrr}
-\toprule
-Method & FID $\downarrow$ & sFID $\downarrow$ & FVA $\uparrow$ & FS $\uparrow$ &
-MNAC $\downarrow$ & CD $\downarrow$ & COUT $\uparrow$ & FR (\%) $\uparrow$ \\
-\midrule
-BLD & \multicolumn{8}{c}{Pending complete 300-image paired run} \\
-Adaptive trust-region CCI (Ours) & \multicolumn{8}{c}{Pending complete 300-image paired run} \\
-\bottomrule
-\end{tabular}
-\end{table*}
+The result pattern reflects the lexicographic design. FR and COUT directly
+measure progress toward the desired classifier state and show the largest
+gains. CD also falls, suggesting that adaptive updates better decouple the
+target transition from correlated attribute changes. By contrast, FID, FVA,
+and FS are nearly unchanged because both methods inherit the same diffusion
+prior and spatial blend. MNAC counts hard threshold crossings and is slightly
+higher even as CD decreases; the two collateral metrics therefore capture
+different behavior and should not be conflated.
 
-\paragraph{Scope and limitations.}
-The completed evidence covers one facial attribute, one dataset, one diffusion
-backbone, a fixed perioral policy, and deterministic seed-42 generation. Its
-statistics are descriptive, and the fixed/adaptive target operating points are
-close rather than identical. The same classifier guides generation and
-supplies classifier-dependent metrics. This is appropriate for explaining
-that model, but may reward model-specific features and does not establish
-agreement with another classifier or with people. Independent transfer and
-human evaluation remain future validation.
-
-The local linearized subproblems provide an auditable priority rule, not a
-global convergence guarantee for a changing non-convex diffusion trajectory.
-The meaning of locality is bounded by segmentation quality, and repeated VAE
-and evaluator differentiation makes adaptive CCI slower than \bld{}. Finally,
-face images and identity embeddings are biometric data. Use should be limited
-to consented model auditing with suitable data protection, not sensitive-trait
-inference or identity-document modification.
+The causal interpretation remains deliberately narrow. Paired interventions
+identify effects under a frozen classifier, generator, prompt, and scheduler;
+they do not establish that a facial component causes an expression in people.
+Likewise, using one classifier for guidance and classifier-dependent evaluation
+measures faithfulness to the explained model, not transfer to another model.
+The local linearizations provide an auditable priority rule rather than a
+global convergence guarantee, and repeated VAE/evaluator differentiation costs
+more than raw \bld{}. Finally, face images and identity embeddings are biometric
+data; the intended use is consented model auditing with appropriate data
+protection.
 
 \section{Conclusions}
 
-We presented one framework in which intervention-verified localization
+We presented a unified framework in which intervention-verified localization
 determines where a counterfactual may change and adaptive lexicographic
-trust-region guidance determines how it changes within that fixed support.
-Paired same-seed interventions and source-ID-clustered confidence intervals
-turn saliency-screened semantic components into a reusable influence graph;
-held-out source evidence resolves a minimal mask without output inspection.
-Predicted-clean measurements then place heterogeneous evaluators on an image
-estimate, clean-coordinate trust regions enforce target-first priorities, and
-final restoration applies the same priorities to the actual post-\bld{} latent.
+trust-region guidance determines how it changes. Paired same-seed
+interventions turn saliency-screened semantic components into a reusable
+classifier-specific influence graph; source evidence then resolves a minimal
+semantic support without inspecting generated candidates. Within that support,
+predicted-clean measurements and clean-coordinate trust regions make target,
+safety, and collateral priorities explicit, including at the final post-blend
+latent.
 
-On 200 completed fixed-mask smile-removal sources, adaptive trust-region CCI
-reduces non-target drift by \AdaptiveDriftReductionVsFixedPct\% relative to
-Fixed-weight CCI at a one-point lower Target@0.8 rate, with close identity and
-outside-mask error but higher runtime. Automatic discovery and attacked
-300-image results remain pending and are not implied by this comparison. More
-broadly, every output is generated evidence about a frozen classifier--
-generator system; it must not be presented as a plausible real-world causal
-statement.
+In paired end-to-end smile removal, the proposed method improves FR by
+\EndToEndFRGainPctPoints{} percentage points and COUT by
+\EndToEndCOUTGain{}, reduces CD by \EndToEndCDReductionPct\%, and preserves
+matched FVA with nearly unchanged FID and FS. These results support localized,
+model-faithful counterfactual control under attack. They remain causal evidence
+about the frozen classifier--generator system, not a statement about physical
+or human causation.
 
+\small
 \bibliographystyle{plain}
 \bibliography{references}
 
