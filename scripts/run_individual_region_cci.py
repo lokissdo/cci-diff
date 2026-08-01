@@ -53,6 +53,54 @@ from scripts.run_counterfactual_region_interventions import (  # noqa: E402
 )
 
 
+class _ContentAddressedA11Backend:
+    """Execute one frozen decision through the shared A11 cache."""
+
+    def generate(
+        self,
+        *,
+        decision: Mapping[str, Any],
+        selection_manifest: Path,
+        args: argparse.Namespace,
+    ) -> InterventionObservation:
+        del selection_manifest
+        from scripts.discover_counterfactual_graph import read_observations
+        from scripts.run_counterfactual_region_interventions import (
+            run_interventions,
+        )
+
+        sample_id = int(decision["sample_id"])
+        regions = tuple(str(value) for value in decision["selected_regions"])
+        run_dir = Path(args.output_dir) / "heldout_a11_runs" / f"{sample_id:05d}"
+        payload = dict(vars(args))
+        payload.update(
+            {
+                "sample_ids": [sample_id],
+                "candidate_regions": None,
+                "region_sets": ["+".join(regions)],
+                "max_set_size": 3,
+                "seeds": [int(args.seed)],
+                "output_dir": str(run_dir),
+                "stop_flip_rate": 1.0,
+                "disable_early_stop": True,
+                "continue_on_error": False,
+                "dry_run": False,
+                "generation_policy": args.generation_policy_manifest,
+                "intervention_cache_dir": args.intervention_cache_dir,
+                "allow_model_download": False,
+            }
+        )
+        run_interventions(argparse.Namespace(**payload))
+        observations = read_observations(
+            run_dir / "intervention_results.csv"
+        )
+        if len(observations) != 1:
+            raise ValueError(
+                f"Expected one A11 observation for sample {sample_id}"
+            )
+        return observations[0]
+
+
 def source_requires_flip(
     probability: float,
     desired_value: int,
@@ -718,6 +766,144 @@ def run_individual_cci(args: argparse.Namespace) -> dict[str, Any]:
     return manifest
 
 
+def run_heldout_a11(
+    args: argparse.Namespace,
+    *,
+    generation_backend: Any | None = None,
+) -> dict[str, Any]:
+    """Freeze every source decision, then execute one cached A11 per image."""
+
+    required = (
+        "selector_model",
+        "generation_policy_manifest",
+        "semantic_mask_manifest",
+    )
+    for name in required:
+        value = getattr(args, name, None)
+        if value is None or not Path(value).is_file():
+            raise FileNotFoundError(f"{name} is required for held-out A11")
+    sample_ids = [int(value) for value in args.sample_ids]
+    if not sample_ids or len(sample_ids) != len(set(sample_ids)):
+        raise ValueError("held-out sample IDs must be non-empty and unique")
+    if bool(getattr(args, "continue_on_error", False)):
+        raise ValueError("held-out A11 cannot continue past incomplete decisions")
+    if generation_backend is None and not getattr(
+        args, "intervention_cache_dir", None
+    ):
+        raise ValueError(
+            "held-out A11 requires intervention_cache_dir"
+        )
+
+    destination = Path(args.output_dir)
+    destination.mkdir(parents=True, exist_ok=True)
+    selection_path = destination / "heldout_selection_manifest.json"
+    phase_payload = dict(vars(args))
+    phase_payload.update(
+        {
+            "selection_manifest": str(selection_path),
+            "selection_only": True,
+            "source_features_only": False,
+            "dry_run": False,
+            "generation_policy": args.generation_policy_manifest,
+        }
+    )
+    run_individual_cci(argparse.Namespace(**phase_payload))
+    selection = json.loads(selection_path.read_text(encoding="utf-8"))
+    declared_digest = selection.get("manifest_sha256")
+    unsigned = {
+        key: value
+        for key, value in selection.items()
+        if key != "manifest_sha256"
+    }
+    if declared_digest != hashlib.sha256(
+        _canonical_json_bytes(unsigned)
+    ).hexdigest():
+        raise ValueError("held-out selection manifest SHA-256 mismatch")
+    decisions = selection.get("decisions")
+    if not isinstance(decisions, list):
+        raise ValueError("held-out selection manifest lacks decisions")
+    decision_ids = [int(item.get("sample_id")) for item in decisions]
+    if sorted(decision_ids) != sorted(sample_ids) or len(decision_ids) != len(
+        set(decision_ids)
+    ):
+        raise ValueError(
+            "held-out selection decisions must exactly cover evaluation IDs"
+        )
+    for decision in decisions:
+        if decision.get("selection_uses_generated_output") is not False:
+            raise ValueError("selection must be computed from source data only")
+        regions = decision.get("selected_regions")
+        if not isinstance(regions, list) or not regions:
+            raise ValueError("every held-out decision needs selected_regions")
+        _reject_evaluation_only_fields(decision)
+
+    backend = generation_backend or _ContentAddressedA11Backend()
+    results = []
+    for decision in sorted(decisions, key=lambda row: int(row["sample_id"])):
+        generated = backend.generate(
+            decision=decision,
+            selection_manifest=selection_path,
+            args=args,
+        )
+        if isinstance(generated, InterventionObservation):
+            row = _observation_payload(generated)
+            row["variant"] = "A11"
+        elif isinstance(generated, Mapping):
+            row = dict(generated)
+        else:
+            raise TypeError("A11 generation backend returned an invalid result")
+        if row.get("variant", "A11") != "A11":
+            raise ValueError("held-out generation backend emitted a non-A11 result")
+        row["variant"] = "A11"
+        results.append(row)
+    _write_rows(destination / "heldout_a11_results.csv", results)
+    manifest = {
+        "version": 1,
+        "workflow": "heldout_selected_mask_a11",
+        "variant": "A11",
+        "sample_ids": sorted(sample_ids),
+        "selection_manifest": str(selection_path),
+        "selection_manifest_sha256": declared_digest,
+        "selection_frozen_before_generation": True,
+        "one_generation_per_image": True,
+        "generation_count": len(results),
+        "a0_invoked": False,
+    }
+    (destination / "heldout_a11_manifest.json").write_text(
+        json.dumps(manifest, sort_keys=True, indent=2) + "\n",
+        encoding="utf-8",
+    )
+    return manifest
+
+
+run_heldout = run_heldout_a11
+
+
+def _reject_evaluation_only_fields(value: Any, path: str = "decision") -> None:
+    if isinstance(value, Mapping):
+        for key, nested in value.items():
+            normalized = str(key).strip().lower()
+            if (
+                normalized.startswith("oracle")
+                or normalized.startswith("fid")
+                or normalized.startswith("sfid")
+                or normalized
+                in {
+                    "output_probability",
+                    "target_pass",
+                    "generated_output",
+                    "final_metric",
+                }
+            ):
+                raise ValueError(
+                    f"{path}.{key} is evaluation-only and forbidden in selection"
+                )
+            _reject_evaluation_only_fields(nested, f"{path}.{key}")
+    elif isinstance(value, (list, tuple)):
+        for index, nested in enumerate(value):
+            _reject_evaluation_only_fields(nested, f"{path}[{index}]")
+
+
 def validate_args(args: argparse.Namespace) -> None:
     if not args.sample_ids or len(args.sample_ids) != len(set(args.sample_ids)):
         raise ValueError("sample_ids must be non-empty and unique")
@@ -840,6 +1026,15 @@ def build_arg_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument("--discovery_manifest", default=None)
     parser.add_argument("--selection_manifest", default=None)
+    parser.add_argument(
+        "--generate_selected_a11",
+        action="store_true",
+        help=(
+            "Freeze all source-only evaluation decisions, then run exactly "
+            "one cached A11 generation per image."
+        ),
+    )
+    parser.add_argument("--intervention_cache_dir", default=None)
     parser.add_argument("--selection_only", action="store_true")
     parser.add_argument("--source_features_only", action="store_true")
     parser.add_argument("--exploratory", action="store_true")
@@ -1062,7 +1257,11 @@ def _append_jsonl(path: Path, payload: Mapping[str, Any]) -> None:
 
 
 def main() -> int:
-    run_individual_cci(build_arg_parser().parse_args())
+    args = build_arg_parser().parse_args()
+    if args.generate_selected_a11:
+        run_heldout_a11(args)
+    else:
+        run_individual_cci(args)
     return 0
 
 
