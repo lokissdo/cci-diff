@@ -9,6 +9,7 @@ import hashlib
 import json
 import subprocess
 import sys
+from functools import lru_cache
 from pathlib import Path
 from typing import Any, Mapping
 
@@ -76,6 +77,33 @@ def _canonical_json_bytes(payload: Any) -> bytes:
     ).encode("utf-8")
 
 
+@lru_cache(maxsize=64)
+def _checkpoint_sha256(path: str, size: int, mtime_ns: int) -> str:
+    del size, mtime_ns
+    return sha256_file(path)
+
+
+def checkpoint_inventory(root: str | Path) -> dict[str, str]:
+    checkpoint_root = Path(root).resolve()
+    if checkpoint_root.is_file():
+        stat = checkpoint_root.stat()
+        return {
+            checkpoint_root.name: _checkpoint_sha256(
+                str(checkpoint_root), stat.st_size, stat.st_mtime_ns
+            )
+        }
+    inventory = {}
+    for artifact in sorted(path for path in checkpoint_root.rglob("*") if path.is_file()):
+        relative = artifact.relative_to(checkpoint_root)
+        if any(part.startswith(".") for part in relative.parts) or relative.name == "README.md":
+            continue
+        stat = artifact.stat()
+        inventory[str(relative)] = _checkpoint_sha256(
+            str(artifact), stat.st_size, stat.st_mtime_ns
+        )
+    return inventory
+
+
 def generation_policy_signature(
     args: argparse.Namespace,
     frozen_policy: FrozenInfluencePolicy,
@@ -85,18 +113,44 @@ def generation_policy_signature(
     external_manifest = getattr(args, "generation_policy_manifest", None)
     if external_manifest is not None:
         source = Path(external_manifest)
+        external = json.loads(source.read_text(encoding="utf-8"))
+        checkpoint_files = external.get("checkpoint_files")
+        if not isinstance(checkpoint_files, dict) or not checkpoint_files:
+            raise ValueError(
+                "external generation policy must bind checkpoint_files"
+            )
+        checkpoint_root = Path(args.model_path).resolve()
+        if not checkpoint_root.is_dir():
+            raise ValueError(
+                "external generation policy checkpoint must be a directory"
+            )
+        declared_root = Path(external.get("checkpoint", "")).resolve()
+        if declared_root != checkpoint_root:
+            raise ValueError("generation policy checkpoint path disagrees with run")
+        actual_inventory = checkpoint_inventory(checkpoint_root)
+        if set(actual_inventory) != set(checkpoint_files):
+            missing = sorted(set(checkpoint_files) - set(actual_inventory))
+            unexpected = sorted(set(actual_inventory) - set(checkpoint_files))
+            raise ValueError(
+                "generation policy checkpoint inventory mismatch: "
+                f"missing={missing}, unexpected={unexpected}"
+            )
+        for relative, expected_sha in sorted(checkpoint_files.items()):
+            if actual_inventory[relative] != expected_sha:
+                raise ValueError(
+                    f"generation policy checkpoint SHA-256 mismatch: {relative}"
+                )
         payload = {
             "target": frozen_policy.target,
             "desired_value": frozen_policy.desired_value,
-            "external_generation_policy": json.loads(
-                source.read_text(encoding="utf-8")
-            ),
+            "external_generation_policy": external,
         }
         return hashlib.sha256(_canonical_json_bytes(payload)).hexdigest()
     payload = {
         "target": frozen_policy.target,
         "desired_value": frozen_policy.desired_value,
         "model_path": str(Path(args.model_path)),
+        "checkpoint_inventory": checkpoint_inventory(args.model_path),
         "template_graph_sha256": sha256_file(args.template_graph),
         "prompt": _prompt_for_graph(args.template_graph),
         "seed": args.seed,
@@ -135,6 +189,11 @@ def selector_feature_signature(
             "classifier_input_size": args.classifier_input_size,
             "gradcam_method": "gradcam_pp",
             "semantic_mask_root": str(Path(args.mask_root)),
+            "semantic_mask_manifest_sha256": (
+                sha256_file(args.semantic_mask_manifest)
+                if getattr(args, "semantic_mask_manifest", None)
+                else None
+            ),
             "semantic_resize": "nearest",
             "generation_policy_signature": generation_policy_signature(
                 args, frozen_policy
@@ -238,6 +297,42 @@ def _load_component_masks(
     return masks
 
 
+def _load_semantic_mask_manifest(
+    args: argparse.Namespace,
+    frozen: FrozenInfluencePolicy,
+) -> dict[str, dict[str, str]] | None:
+    value = getattr(args, "semantic_mask_manifest", None)
+    if value is None:
+        if (
+            getattr(args, "selector_model", None)
+            or bool(getattr(args, "source_features_only", False))
+        ) and not bool(getattr(args, "exploratory", False)):
+            raise ValueError(
+                "semantic_mask_manifest is required for non-exploratory selector use"
+            )
+        return None
+    path = Path(value)
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    if payload.get("influence_graph_sha256") != frozen.graph_sha256:
+        raise ValueError("semantic mask manifest graph SHA-256 mismatch")
+    if tuple(payload.get("verified_regions", ())) != frozen.verified_regions:
+        raise ValueError("semantic mask manifest region family mismatch")
+    raw_masks = payload.get("sample_masks")
+    if not isinstance(raw_masks, dict):
+        raise ValueError("semantic mask manifest lacks sample_masks")
+    normalized = {}
+    for sample_id, regions in raw_masks.items():
+        if not isinstance(regions, dict):
+            raise ValueError("semantic mask manifest sample entry must be an object")
+        normalized[str(int(sample_id))] = {
+            str(region): str(digest) for region, digest in sorted(regions.items())
+        }
+    missing = sorted(set(args.sample_ids) - {int(value) for value in normalized})
+    if missing:
+        raise ValueError(f"semantic mask manifest lacks run IDs: {missing}")
+    return normalized
+
+
 def run_individual_cci(args: argparse.Namespace) -> dict[str, Any]:
     """Select and generate exactly once for every held-out source image."""
 
@@ -245,6 +340,7 @@ def run_individual_cci(args: argparse.Namespace) -> dict[str, Any]:
 
     validate_args(args)
     frozen = load_frozen_influence_policy(args.influence_graph)
+    mask_manifest = _load_semantic_mask_manifest(args, frozen)
     template = load_concept_graph(args.template_graph)
     if (
         template.intervention.concept != frozen.target
@@ -355,6 +451,16 @@ def run_individual_cci(args: argparse.Namespace) -> dict[str, Any]:
                     )
                 ).is_file()
             }
+            semantic_mask_sha256 = {
+                region: sha256_file(path)
+                for region, path in sorted(component_paths.items())
+            }
+            if mask_manifest is not None:
+                expected_masks = mask_manifest.get(str(sample_id))
+                if expected_masks != semantic_mask_sha256:
+                    raise ValueError(
+                        f"semantic mask manifest mismatch for sample {sample_id}"
+                    )
             if bool(getattr(args, "source_features_only", False)):
                 if not source_requires_flip(
                     source_probability, frozen.desired_value
@@ -376,6 +482,7 @@ def run_individual_cci(args: argparse.Namespace) -> dict[str, Any]:
                             "source_path": str(source),
                             "source_sha256": sha256_file(source),
                             "source_probability": source_probability,
+                            "semantic_mask_sha256": semantic_mask_sha256,
                             "regions": list(row.regions),
                             **{
                                 name: value
@@ -412,6 +519,7 @@ def run_individual_cci(args: argparse.Namespace) -> dict[str, Any]:
                 frozen_policy=frozen,
                 execution_graph_path=graph_path,
                 selector_sha256=selector_sha256,
+                semantic_mask_sha256=semantic_mask_sha256,
             )
             selections.append(selection_row)
             prepared.append(
@@ -633,6 +741,11 @@ def validate_args(args: argparse.Namespace) -> None:
         raise FileNotFoundError(
             f"generation_policy_manifest not found: {generation_manifest}"
         )
+    semantic_manifest = getattr(args, "semantic_mask_manifest", None)
+    if semantic_manifest is not None and not Path(semantic_manifest).is_file():
+        raise FileNotFoundError(
+            f"semantic_mask_manifest not found: {semantic_manifest}"
+        )
     if not Path(args.model_path).exists():
         raise FileNotFoundError(f"model_path not found: {args.model_path}")
     if bool(getattr(args, "source_features_only", False)) and (
@@ -676,9 +789,10 @@ def _validate_selector_for_run(
             "held-out sample IDs overlap selector development cohorts: "
             f"{overlap}"
         )
-    if artifact.evaluation_sample_ids and not set(args.sample_ids).issubset(
-        artifact.evaluation_sample_ids
-    ) and not bool(getattr(args, "exploratory", False)):
+    evaluation_verified = bool(artifact.evaluation_sample_ids) and set(
+        args.sample_ids
+    ).issubset(artifact.evaluation_sample_ids)
+    if not evaluation_verified and not bool(getattr(args, "exploratory", False)):
         raise ValueError("run sample IDs are absent from selector evaluation cohort")
 
 
@@ -701,6 +815,7 @@ def build_arg_parser() -> argparse.ArgumentParser:
     parser.add_argument("--classifier_path", required=True)
     parser.add_argument("--selector_model", default=None)
     parser.add_argument("--generation_policy_manifest", default=None)
+    parser.add_argument("--semantic_mask_manifest", default=None)
     parser.add_argument("--identity_model_path", required=True)
     parser.add_argument("--output_dir", required=True)
     parser.add_argument("--device", default="mps")
@@ -772,6 +887,7 @@ def _selection_payload(
     frozen_policy: FrozenInfluencePolicy,
     execution_graph_path: str | Path,
     selector_sha256: str | None = None,
+    semantic_mask_sha256: Mapping[str, str] | None = None,
 ) -> dict[str, Any]:
     payload = {
         "sample_id": sample_id,
@@ -790,6 +906,7 @@ def _selection_payload(
         "selection_uses_generated_output": False,
         "influence_graph_sha256": frozen_policy.graph_sha256,
         "execution_graph_sha256": sha256_file(execution_graph_path),
+        "semantic_mask_sha256": dict(semantic_mask_sha256 or {}),
     }
     if isinstance(selection, RiskControlledSelection):
         payload.update(

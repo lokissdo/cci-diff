@@ -31,6 +31,8 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
+from scripts.run_individual_region_cci import checkpoint_inventory  # noqa: E402
+
 
 VARIANTS = {
     "A0": {
@@ -1140,6 +1142,31 @@ def run_pilot(args: argparse.Namespace) -> dict[str, Any]:
             "boundary_weight": 0.3,
             "tv_weight": 0.05,
             "step_size": 0.08,
+        },
+        "generation_policy": {
+            "checkpoint": str(Path(args.model_path)),
+            "checkpoint_files": checkpoint_inventory(args.model_path),
+            "prompts": {
+                feature: _prompt_for_graph(graph_paths[feature])
+                for feature in args.features
+            },
+            "seed": args.seed,
+            "num_inference_steps": args.num_inference_steps,
+            "guidance_scale": 5.0,
+            "blending_start_percentage": 0.25,
+            "torch_dtype": (
+                "float16"
+                if args.torch_dtype == "auto" and args.device.startswith("cuda")
+                else "float32"
+                if args.torch_dtype == "auto"
+                else args.torch_dtype
+            ),
+            "variants": {name: VARIANTS[name] for name in args.variants},
+            "post_attack": {
+                "mode": args.cci_post_attack,
+                "epsilon_schedule": args.cci_post_attack_epsilon_schedule,
+                "boundary_margin": args.cci_post_attack_boundary_margin,
+            },
         },
     }
     for feature in args.features:

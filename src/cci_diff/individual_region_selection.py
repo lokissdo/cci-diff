@@ -189,7 +189,10 @@ def load_frozen_influence_policy(
         region = str(edge.get("target", "")).strip()
         if region:
             verified.append(region)
-    audit_regions = _canonical_regions(verified)
+    explicit_verified = payload.get("verified_regions")
+    audit_regions = _canonical_regions(
+        explicit_verified if explicit_verified is not None else verified
+    )
     if not audit_regions:
         raise ValueError("Influence graph has no verified regions")
     generation_regions = payload.get("generation_regions")

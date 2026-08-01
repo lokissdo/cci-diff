@@ -134,6 +134,7 @@ class InfluenceGraphResult:
     selection_status: str
     required_flip_rate: float
     minimum_samples: int
+    verified_regions: RegionTuple
     verified_edges: tuple[tuple[str, str, str], ...]
     evidence: tuple[RegionSetEvidence, ...]
     interactions: tuple[RegionInteraction, ...]
@@ -156,6 +157,7 @@ class InfluenceGraphResult:
             "selection_status": self.selection_status,
             "required_flip_rate": self.required_flip_rate,
             "minimum_samples": self.minimum_samples,
+            "verified_regions": list(self.verified_regions),
             "verified_edges": [
                 {"source": source, "target": target, "relation": relation}
                 for source, target, relation in self.verified_edges
@@ -488,6 +490,15 @@ def build_influence_graph(
         evidence_by_regions, required_flip_rate=required_flip_rate
     )
     annotated_evidence = annotate_region_sets(evidence_by_regions)
+    verified_regions = tuple(
+        sorted(
+            {
+                region
+                for regions in (*candidate_region_sets, selected.regions)
+                for region in regions
+            }
+        )
+    )
     verified_edges = tuple(
         (
             target,
@@ -523,6 +534,7 @@ def build_influence_graph(
         ),
         required_flip_rate=required_flip_rate,
         minimum_samples=minimum_samples,
+        verified_regions=verified_regions,
         verified_edges=verified_edges,
         evidence=annotated_evidence,
         interactions=compute_interactions(evidence_by_regions),

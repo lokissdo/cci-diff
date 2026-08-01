@@ -338,9 +338,11 @@ source decision. The selector writes and hashes the complete decision manifest
 before either direct generation or fixed-output replay can read a result.
 
 Four sample-ID roles are pairwise disjoint: graph discovery, selector fitting,
-selector calibration, and held-out evaluation. For the existing 300-image
-fixed-mask run, prepare a predeclared 40/80/100/80 split and export only
-discovery interventions and fit/calibration outcomes:
+selector calibration, and held-out evaluation. The 300-image replay requires
+both fixed candidate roots to contain all 600 A0/A11 rows; do not run the
+commands below while the companion perioral generation is incomplete. Once
+complete, prepare a predeclared 40/80/100/80 split and export only discovery
+interventions and fit/calibration outcomes:
 
 ```bash
 .venv-ml/bin/python scripts/prepare_adaptive_replay_data.py \
@@ -367,6 +369,17 @@ Build the candidate graph from the discovery IDs only:
   --output_dir outputs/attacked_a0_a11_smile300_seed42/adaptive_graph
 ```
 
+Freeze the exact semantic-mask bytes for all four predeclared cohorts before
+extracting any selector feature:
+
+```bash
+.venv-ml/bin/python scripts/build_semantic_mask_manifest.py \
+  --influence_graph outputs/attacked_a0_a11_smile300_seed42/adaptive_graph/influence_graph.json \
+  --sample_ids $(.venv-ml/bin/python -c 'import json; d=json.load(open("outputs/attacked_a0_a11_smile300_seed42/adaptive_prepared/split_manifest.json")); print(*sum(d["cohorts"].values(), []))') \
+  --mask_root data/CelebAMask-HQ/CelebAMask-HQ-mask-anno \
+  --output outputs/attacked_a0_a11_smile300_seed42/adaptive_prepared/semantic_mask_manifest.json
+```
+
 Compute the eight source-only features for all IDs. This mode loads the source
 classifier, Grad-CAM++, and segmentation masks, but performs no selection and
 no diffusion:
@@ -380,6 +393,7 @@ no diffusion:
   --classifier_path models/resnet50_multilabel_model.pth \
   --identity_model_path models/facenet_vggface2.ts \
   --generation_policy_manifest examples/replay_smile_a11_policy.json \
+  --semantic_mask_manifest outputs/attacked_a0_a11_smile300_seed42/adaptive_prepared/semantic_mask_manifest.json \
   --source_features_only \
   --output_dir outputs/attacked_a0_a11_smile300_seed42/adaptive_source_features \
   --device mps
@@ -414,6 +428,7 @@ manifest without launching diffusion:
   --classifier_path models/resnet50_multilabel_model.pth \
   --identity_model_path models/facenet_vggface2.ts \
   --generation_policy_manifest examples/replay_smile_a11_policy.json \
+  --semantic_mask_manifest outputs/attacked_a0_a11_smile300_seed42/adaptive_prepared/semantic_mask_manifest.json \
   --selector_model outputs/attacked_a0_a11_smile300_seed42/adaptive_selector/selector_model.json \
   --selection_only \
   --output_dir outputs/attacked_a0_a11_smile300_seed42/adaptive_heldout_selections \
@@ -429,6 +444,9 @@ runner:
   --selection_manifest outputs/attacked_a0_a11_smile300_seed42/adaptive_heldout_selections/adaptive_selection_manifest.json \
   --candidate_results mouth=outputs/attacked_a0_a11_smile300_seed42/mouth/pilot_results.csv \
   --candidate_results lower_lip+mouth+upper_lip=outputs/attacked_a0_a11_smile300_seed42/mouth_upper_lower_lip/pilot_results.csv \
+  --candidate_manifest mouth=outputs/attacked_a0_a11_smile300_seed42/mouth/pilot_manifest.json \
+  --candidate_manifest lower_lip+mouth+upper_lip=outputs/attacked_a0_a11_smile300_seed42/mouth_upper_lower_lip/pilot_manifest.json \
+  --generation_policy_manifest examples/replay_smile_a11_policy.json \
   --selector_model outputs/attacked_a0_a11_smile300_seed42/adaptive_selector/selector_model.json \
   --evaluation_ids outputs/attacked_a0_a11_smile300_seed42/adaptive_prepared/evaluation_ids.json \
   --expected_count 80 \

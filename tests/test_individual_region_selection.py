@@ -9,6 +9,7 @@ from cci_diff.individual_region_selection import (
     load_frozen_influence_policy,
     select_individual_region_set,
 )
+from cci_diff.counterfactual_graph import RegionSetEvidence, build_influence_graph
 
 
 def influence_payload():
@@ -65,6 +66,48 @@ def influence_payload():
             },
         ],
     }
+
+
+def test_discovered_joint_candidate_round_trips_without_singleton_lip_edges(
+    tmp_path,
+):
+    def evidence(regions, effect, flip_rate, area):
+        return RegionSetEvidence(
+            regions=regions,
+            row_count=40,
+            sample_count=40,
+            flip_rate=flip_rate,
+            mean_effect=effect,
+            median_effect=effect,
+            effect_ci_low=effect / 2.0,
+            effect_ci_high=effect * 1.5,
+            mean_mask_fraction=area,
+        )
+
+    mouth = evidence(("mouth",), 0.20, 0.70, 0.02)
+    perioral = evidence(
+        ("lower_lip", "mouth", "upper_lip"), 0.35, 0.97, 0.05
+    )
+    graph = build_influence_graph(
+        target="Smiling",
+        desired_value=0,
+        evidence_by_regions={
+            mouth.regions: mouth,
+            perioral.regions: perioral,
+        },
+        minimum_samples=20,
+    )
+    graph_path = tmp_path / "graph.json"
+    graph_path.write_text(json.dumps(graph.to_dict()), encoding="utf-8")
+
+    policy = load_frozen_influence_policy(graph_path)
+
+    assert policy.verified_regions == ("lower_lip", "mouth", "upper_lip")
+    assert policy.candidate_region_sets == (
+        ("lower_lip", "mouth", "upper_lip"),
+        ("mouth",),
+    )
+    assert policy.fallback_regions == ("lower_lip", "mouth", "upper_lip")
 
 
 def make_policy(**updates):

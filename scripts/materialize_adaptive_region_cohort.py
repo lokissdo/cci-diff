@@ -155,6 +155,184 @@ def _write_rows(
         writer.writerows(rows)
 
 
+def _validate_candidate_manifests(
+    candidate_paths: Mapping[RegionTuple, Path],
+    candidate_manifests: Mapping[RegionTuple | str, str | Path] | None,
+    *,
+    exploratory: bool,
+    selection_manifest: Mapping[str, Any],
+    generation_policy_manifest: str | Path | None,
+    expected_variants: Sequence[str],
+) -> dict[RegionTuple, dict[str, Any]]:
+    if candidate_manifests is None:
+        if exploratory:
+            return {}
+        raise ValueError(
+            "candidate_manifests are required for held-out materialization"
+        )
+    external_policy = None
+    if generation_policy_manifest is None:
+        if not exploratory:
+            raise ValueError(
+                "generation_policy_manifest is required for held-out materialization"
+            )
+    else:
+        external_policy = json.loads(
+            Path(generation_policy_manifest).read_text(encoding="utf-8")
+        )
+        signed_policy = {
+            "target": selection_manifest["target"],
+            "desired_value": selection_manifest["desired_value"],
+            "external_generation_policy": external_policy,
+        }
+        signature = hashlib.sha256(
+            _canonical_json_bytes(signed_policy)
+        ).hexdigest()
+        if signature != selection_manifest.get("generation_policy_signature"):
+            raise ValueError(
+                "generation policy disagrees with frozen selection manifest"
+            )
+    normalized = {
+        _parse_regions(regions): Path(path)
+        for regions, path in candidate_manifests.items()
+    }
+    if set(normalized) != set(candidate_paths):
+        raise ValueError("candidate manifest families must match candidate results")
+    audited = {}
+    common_policy = None
+    policy_fields = (
+        "classifier_sha256",
+        "variants",
+        "controller_modes",
+        "mask_dilations",
+        "mask_shapes",
+        "post_attack",
+        "historical_a1",
+        "generation_policy",
+    )
+    for regions, path in sorted(normalized.items()):
+        payload = json.loads(path.read_text(encoding="utf-8"))
+        declared = _parse_regions(
+            payload.get("region", {}).get("canonical_components", ())
+        )
+        if declared != regions:
+            raise ValueError(
+                f"candidate manifest region mismatch: {regions} != {declared}"
+            )
+        graph_sha256_by_feature = {}
+        for feature, graph_value in payload.get("graph_paths", {}).items():
+            graph_path = Path(graph_value)
+            graph = json.loads(graph_path.read_text(encoding="utf-8"))
+            graph_regions = _parse_regions(
+                graph.get("region", {}).get("components", ())
+            )
+            if graph_regions != regions:
+                raise ValueError(
+                    f"candidate graph region mismatch: {regions} != {graph_regions}"
+                )
+            graph_sha256_by_feature[str(feature)] = sha256_file(graph_path)
+        if not graph_sha256_by_feature:
+            raise ValueError("candidate manifest lacks graph_paths")
+        if external_policy is not None:
+            candidate_seed = payload.get("random_sample_seed")
+            inherited_ids = payload.get("sample_ids_manifest")
+            if candidate_seed is None and inherited_ids:
+                inherited_payload = json.loads(
+                    Path(inherited_ids).read_text(encoding="utf-8")
+                )
+                candidate_seed = inherited_payload.get("random_sample_seed")
+            variant = payload.get("variants", {}).get(
+                str(external_policy.get("variant")), {}
+            )
+            expected_variant = {
+                "hook": external_policy.get("hook"),
+                "controller_mode": external_policy.get("controller_mode"),
+                "projection": external_policy.get("projection"),
+            }
+            actual_variant = {name: variant.get(name) for name in expected_variant}
+            external_attack = external_policy.get("post_attack", {})
+            actual_attack = payload.get("post_attack", {})
+            actual_schedule = actual_attack.get("epsilon_schedule", ())
+            if isinstance(actual_schedule, str):
+                actual_schedule = [float(value) for value in actual_schedule.split(",")]
+            checks = (
+                payload.get("classifier_sha256")
+                == external_policy.get("classifier_sha256"),
+                candidate_seed == external_policy.get("seed"),
+                external_policy.get("mask_dilation") in payload.get("mask_dilations", ()),
+                actual_variant == expected_variant,
+                actual_attack.get("mode") == external_attack.get("mode"),
+                list(actual_schedule) == external_attack.get("epsilon_schedule"),
+                actual_attack.get("boundary_margin")
+                == external_attack.get("boundary_margin"),
+            )
+            if not all(checks):
+                raise ValueError(
+                    f"candidate manifest generation policy mismatch: {regions}"
+                )
+            full_policy = payload.get("generation_policy")
+            provenance_level = "full_generation_policy"
+            if full_policy is None:
+                legacy = external_policy.get("legacy_candidate_attestation", {})
+                if not legacy.get("allowed"):
+                    raise ValueError(
+                        "legacy candidate manifest lacks full generation policy"
+                    )
+                provenance_level = "legacy_generation_policy_attestation"
+            else:
+                matched_arms = external_policy.get("matched_arms", {})
+                if set(matched_arms) != set(expected_variants):
+                    raise ValueError(
+                        "generation policy matched arms must equal materialized variants"
+                    )
+                prompts = full_policy.get("prompts", {})
+                full_attack = dict(full_policy.get("post_attack", {}))
+                if isinstance(full_attack.get("epsilon_schedule"), str):
+                    full_attack["epsilon_schedule"] = [
+                        float(value)
+                        for value in full_attack["epsilon_schedule"].split(",")
+                    ]
+                full_checks = (
+                    full_policy.get("checkpoint_files")
+                    == external_policy.get("checkpoint_files"),
+                    Path(full_policy.get("checkpoint", "")).resolve()
+                    == Path(external_policy.get("checkpoint", "")).resolve(),
+                    len(prompts) == 1
+                    and next(iter(prompts.values())) == external_policy.get("prompt"),
+                    full_policy.get("seed") == external_policy.get("seed"),
+                    full_policy.get("num_inference_steps")
+                    == external_policy.get("num_inference_steps"),
+                    full_policy.get("guidance_scale")
+                    == external_policy.get("guidance_scale"),
+                    full_policy.get("blending_start_percentage")
+                    == external_policy.get("blending_start_percentage"),
+                    full_policy.get("torch_dtype")
+                    == external_policy.get("torch_dtype"),
+                    full_policy.get("variants") == matched_arms,
+                    full_attack == external_policy.get("post_attack"),
+                )
+                if not all(full_checks):
+                    raise ValueError(
+                        f"candidate full generation policy mismatch: {regions}"
+                    )
+        else:
+            provenance_level = "exploratory_unverified"
+        policy = {name: payload.get(name) for name in policy_fields}
+        policy_digest = hashlib.sha256(_canonical_json_bytes(policy)).hexdigest()
+        if common_policy is None:
+            common_policy = policy_digest
+        elif policy_digest != common_policy:
+            raise ValueError("candidate manifests use different generation policies")
+        audited[regions] = {
+            "path": str(path),
+            "sha256": sha256_file(path),
+            "generation_policy_sha256": policy_digest,
+            "graph_sha256_by_feature": graph_sha256_by_feature,
+            "provenance_level": provenance_level,
+        }
+    return audited
+
+
 def _validate_selector_cohorts(
     selector_model: str | Path | None,
     manifest: Mapping[str, Any],
@@ -163,7 +341,12 @@ def _validate_selector_cohorts(
     exploratory: bool,
 ) -> str:
     if selector_model is None:
-        return "selector_cohorts_not_verified"
+        if not exploratory:
+            raise ValueError(
+                "selector_model is required for held-out materialization; "
+                "use --exploratory for NOT HELD-OUT replay"
+            )
+        return "exploratory_not_held_out"
     path = Path(selector_model)
     artifact = FrozenSelectorArtifact.from_dict(
         json.loads(path.read_text(encoding="utf-8"))
@@ -181,11 +364,16 @@ def _validate_selector_cohorts(
             "materialized IDs overlap selector development cohorts: "
             f"{overlap}"
         )
-    if artifact.evaluation_sample_ids and not sample_ids.issubset(
+    evaluation_verified = bool(artifact.evaluation_sample_ids) and sample_ids.issubset(
         artifact.evaluation_sample_ids
-    ) and not exploratory:
+    )
+    if not evaluation_verified and not exploratory:
         raise ValueError("materialized IDs are absent from selector evaluation cohort")
-    return "exploratory_not_held_out" if overlap else "held_out_verified"
+    return (
+        "exploratory_not_held_out"
+        if exploratory or overlap or not evaluation_verified
+        else "held_out_verified"
+    )
 
 
 def materialize_adaptive_cohort(
@@ -198,6 +386,8 @@ def materialize_adaptive_cohort(
     selector_model: str | Path | None = None,
     evaluation_ids: Iterable[int] | None = None,
     exploratory: bool = False,
+    candidate_manifests: Mapping[RegionTuple | str, str | Path] | None = None,
+    generation_policy_manifest: str | Path | None = None,
 ) -> list[dict[str, str]]:
     """Materialize fixed outputs selected by a finalized source-only manifest."""
 
@@ -228,6 +418,14 @@ def materialize_adaptive_cohort(
         _parse_regions(regions): Path(path)
         for regions, path in candidate_results.items()
     }
+    audited_candidate_manifests = _validate_candidate_manifests(
+        normalized_paths,
+        candidate_manifests,
+        exploratory=exploratory,
+        selection_manifest=manifest,
+        generation_policy_manifest=generation_policy_manifest,
+        expected_variants=variants,
+    )
     selected_families = {row["selected_regions"] for row in decisions}
     missing_families = selected_families - set(normalized_paths)
     if missing_families:
@@ -237,7 +435,6 @@ def materialize_adaptive_cohort(
 
     indexed = {}
     common_fields = None
-    available_keys = None
     expected_keys = {
         (sample_id, variant)
         for sample_id in decision_ids
@@ -245,18 +442,23 @@ def materialize_adaptive_cohort(
     }
     for regions, path in normalized_paths.items():
         index, fields = _read_candidate_rows(path, regions, variants)
+        graph_digests = audited_candidate_manifests.get(regions, {}).get(
+            "graph_sha256_by_feature", {}
+        )
+        if graph_digests:
+            for row in index.values():
+                expected_graph = graph_digests.get(row.get("feature"))
+                if expected_graph is None or row.get("graph_sha256") != expected_graph:
+                    raise ValueError(
+                        f"candidate CSV graph mismatch for {regions}/"
+                        f"{row.get('sample_id')}/{row.get('variant')}"
+                    )
         if not expected_keys.issubset(index):
             missing = sorted(expected_keys - set(index))
             missing_variants = sorted({variant for _, variant in missing})
             raise ValueError(
                 f"candidate results for {regions} do not match IDs/variants; "
                 f"missing variants={missing_variants}, missing={missing[:5]}"
-            )
-        if available_keys is None:
-            available_keys = set(index)
-        elif set(index) != available_keys:
-            raise ValueError(
-                "candidate result roots must contain identical IDs and variants"
             )
         if common_fields is None:
             common_fields = fields
@@ -316,6 +518,18 @@ def materialize_adaptive_cohort(
             }
             for regions, path in sorted(normalized_paths.items())
         },
+        "candidate_manifests": {
+            "+".join(regions): value
+            for regions, value in sorted(audited_candidate_manifests.items())
+        },
+        "generation_policy_manifest": (
+            {
+                "path": str(generation_policy_manifest),
+                "sha256": sha256_file(generation_policy_manifest),
+            }
+            if generation_policy_manifest is not None
+            else None
+        ),
         "sample_count": len(decision_ids),
         "row_count": len(output_rows),
         "variants": list(variants),
@@ -387,10 +601,17 @@ def build_arg_parser() -> argparse.ArgumentParser:
         required=True,
         metavar="REGIONS=CSV",
     )
+    parser.add_argument(
+        "--candidate_manifest",
+        action="append",
+        default=[],
+        metavar="REGIONS=JSON",
+    )
     parser.add_argument("--output_dir", required=True)
     parser.add_argument("--expected_variants", nargs="+", default=["A0", "A11"])
     parser.add_argument("--expected_count", type=int, default=None)
     parser.add_argument("--selector_model", default=None)
+    parser.add_argument("--generation_policy_manifest", default=None)
     parser.add_argument("--evaluation_ids", default=None)
     parser.add_argument("--exploratory", action="store_true")
     return parser
@@ -407,6 +628,15 @@ def main() -> int:
         if canonical in mappings:
             raise ValueError(f"duplicate candidate_results mapping: {canonical}")
         mappings[canonical] = path
+    manifest_mappings = {}
+    for item in args.candidate_manifest:
+        if "=" not in item:
+            raise ValueError("candidate_manifest must use REGIONS=JSON")
+        regions, path = item.split("=", 1)
+        canonical = _parse_regions(regions)
+        if canonical in manifest_mappings:
+            raise ValueError(f"duplicate candidate_manifest mapping: {canonical}")
+        manifest_mappings[canonical] = path
     materialize_adaptive_cohort(
         args.selection_manifest,
         mappings,
@@ -416,6 +646,8 @@ def main() -> int:
         selector_model=args.selector_model,
         evaluation_ids=_read_ids(args.evaluation_ids),
         exploratory=args.exploratory,
+        candidate_manifests=manifest_mappings or None,
+        generation_policy_manifest=args.generation_policy_manifest,
     )
     return 0
 

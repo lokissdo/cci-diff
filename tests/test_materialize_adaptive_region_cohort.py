@@ -54,7 +54,13 @@ def write_selection_manifest(path, decisions):
     return path
 
 
-def write_candidate_csv(path, regions, sample_ids=(1, 2), variants=("A0", "A11")):
+def write_candidate_csv(
+    path,
+    regions,
+    sample_ids=(1, 2),
+    variants=("A0", "A11"),
+    graph_sha256="",
+):
     rows = []
     for sample_id in sample_ids:
         for variant in variants:
@@ -75,6 +81,7 @@ def write_candidate_csv(path, regions, sample_ids=(1, 2), variants=("A0", "A11")
                     "candidate_output_path": str(candidate),
                     "post_attack_escalated": "True",
                     "target_pass": "True",
+                    "graph_sha256": graph_sha256,
                 }
             )
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -82,6 +89,31 @@ def write_candidate_csv(path, regions, sample_ids=(1, 2), variants=("A0", "A11")
         writer = csv.DictWriter(handle, fieldnames=rows[0])
         writer.writeheader()
         writer.writerows(rows)
+    return path
+
+
+def write_candidate_manifest(path, regions):
+    graph = path.with_suffix(".graph.json")
+    graph.write_text(
+        json.dumps({"region": {"components": list(regions)}}),
+        encoding="utf-8",
+    )
+    path.write_text(
+        json.dumps(
+            {
+                "region": {"canonical_components": list(regions)},
+                "classifier_sha256": "e" * 64,
+                "variants": {"A0": {}, "A11": {}},
+                "controller_modes": ["disabled", "trust_region"],
+                "mask_dilations": [8],
+                "mask_shapes": {},
+                "post_attack": {"mode": "smooth_boundary"},
+                "historical_a1": False,
+                "graph_paths": {"smile": str(graph)},
+            }
+        ),
+        encoding="utf-8",
+    )
     return path
 
 
@@ -107,6 +139,7 @@ def test_materializer_chooses_selected_root_for_both_variants(tmp_path):
         tmp_path / "adaptive",
         expected_variants=("A0", "A11"),
         expected_count=2,
+        exploratory=True,
     )
 
     assert [
@@ -135,6 +168,7 @@ def test_materializer_rejects_incomplete_variant_pairs(tmp_path):
             tmp_path / "adaptive",
             expected_variants=("A0", "A11"),
             expected_count=2,
+            exploratory=True,
         )
 
 
@@ -152,6 +186,7 @@ def test_materializer_rejects_manifest_changed_after_hashing(tmp_path):
             {MOUTH: tmp_path / "missing.csv", PERIORAL: tmp_path / "missing2.csv"},
             tmp_path / "adaptive",
             expected_count=2,
+            exploratory=True,
         )
 
 
@@ -172,6 +207,7 @@ def test_materializer_rejects_generated_fields_in_selection_decision(tmp_path):
             candidate_results(tmp_path),
             tmp_path / "adaptive",
             expected_count=2,
+            exploratory=True,
         )
 
 
@@ -189,6 +225,7 @@ def test_real_schema_preserves_post_attack_selected_output(tmp_path):
         candidate_results(tmp_path),
         tmp_path / "adaptive",
         expected_count=2,
+        exploratory=True,
     )
 
     assert all(row["output_path"].endswith("sd2_bld_grid.png") for row in rows)
@@ -217,7 +254,110 @@ def test_materializer_allows_unselected_rows_in_complete_candidate_roots(
     }
 
     rows = materialize_adaptive_cohort(
-        manifest, roots, tmp_path / "adaptive", expected_count=2
+        manifest,
+        roots,
+        tmp_path / "adaptive",
+        expected_count=2,
+        exploratory=True,
     )
 
     assert {row["sample_id"] for row in rows} == {"1", "2"}
+
+
+def test_materializer_compares_only_frozen_decision_domain(tmp_path):
+    manifest = write_selection_manifest(
+        tmp_path / "selections.json", {1: MOUTH, 2: PERIORAL}
+    )
+    roots = {
+        MOUTH: write_candidate_csv(
+            tmp_path / "mouth.csv", MOUTH, sample_ids=(1, 2, 3)
+        ),
+        PERIORAL: write_candidate_csv(
+            tmp_path / "perioral.csv", PERIORAL, sample_ids=(1, 2, 4)
+        ),
+    }
+
+    rows = materialize_adaptive_cohort(
+        manifest,
+        roots,
+        tmp_path / "adaptive",
+        expected_count=2,
+        exploratory=True,
+    )
+
+    assert {row["sample_id"] for row in rows} == {"1", "2"}
+
+
+def test_materializer_requires_selector_for_held_out_claim(tmp_path):
+    manifest = write_selection_manifest(
+        tmp_path / "selections.json", {1: MOUTH, 2: PERIORAL}
+    )
+
+    with pytest.raises(ValueError, match="selector_model is required"):
+        materialize_adaptive_cohort(
+            manifest,
+            candidate_results(tmp_path),
+            tmp_path / "adaptive",
+            expected_count=2,
+        )
+
+
+def test_materializer_rejects_swapped_candidate_manifest_labels(tmp_path):
+    manifest = write_selection_manifest(
+        tmp_path / "selections.json", {1: MOUTH, 2: PERIORAL}
+    )
+    candidate_manifests = {
+        MOUTH: write_candidate_manifest(tmp_path / "mouth_manifest.json", PERIORAL),
+        PERIORAL: write_candidate_manifest(
+            tmp_path / "perioral_manifest.json", MOUTH
+        ),
+    }
+
+    with pytest.raises(ValueError, match="region mismatch"):
+        materialize_adaptive_cohort(
+            manifest,
+            candidate_results(tmp_path),
+            tmp_path / "adaptive",
+            expected_count=2,
+            exploratory=True,
+            candidate_manifests=candidate_manifests,
+        )
+
+
+def test_materializer_rejects_candidate_csv_swapped_under_correct_label(tmp_path):
+    manifest = write_selection_manifest(
+        tmp_path / "selections.json", {1: MOUTH, 2: PERIORAL}
+    )
+    mouth_manifest = write_candidate_manifest(
+        tmp_path / "mouth_manifest.json", MOUTH
+    )
+    perioral_manifest = write_candidate_manifest(
+        tmp_path / "perioral_manifest.json", PERIORAL
+    )
+    mouth_graph = mouth_manifest.with_suffix(".graph.json")
+    perioral_graph = perioral_manifest.with_suffix(".graph.json")
+    roots = {
+        MOUTH: write_candidate_csv(
+            tmp_path / "perioral.csv",
+            PERIORAL,
+            graph_sha256=hashlib.sha256(perioral_graph.read_bytes()).hexdigest(),
+        ),
+        PERIORAL: write_candidate_csv(
+            tmp_path / "mouth.csv",
+            MOUTH,
+            graph_sha256=hashlib.sha256(mouth_graph.read_bytes()).hexdigest(),
+        ),
+    }
+
+    with pytest.raises(ValueError, match="candidate CSV graph mismatch"):
+        materialize_adaptive_cohort(
+            manifest,
+            roots,
+            tmp_path / "adaptive",
+            expected_count=2,
+            exploratory=True,
+            candidate_manifests={
+                MOUTH: mouth_manifest,
+                PERIORAL: perioral_manifest,
+            },
+        )

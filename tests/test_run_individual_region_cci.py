@@ -27,6 +27,7 @@ from scripts.run_individual_region_cci import (
     selector_feature_signature,
     source_requires_flip,
 )
+from scripts.build_semantic_mask_manifest import build_semantic_mask_manifest
 
 
 def template_graph_payload():
@@ -151,7 +152,7 @@ def make_file_tree(tmp_path, sample_ids=(0,)):
     return template, influence, image_root, mask_root, classifier, identity, model
 
 
-def write_selector(path, args, *, evaluation_ids=()):
+def write_selector(path, args, *, evaluation_ids=None):
     policy = load_frozen_influence_policy(args.influence_graph)
     coefficients = (0.0,) * len(FEATURE_NAMES)
     artifact = FrozenSelectorArtifact(
@@ -179,7 +180,9 @@ def write_selector(path, args, *, evaluation_ids=()):
         risk_calibration=RiskThreshold(0.8, 60, 0, 0.04),
         coverage_threshold=0.8,
         safe_success_thresholds=SafeSuccessThresholds(),
-        evaluation_sample_ids=tuple(evaluation_ids),
+        evaluation_sample_ids=tuple(
+            args.sample_ids if evaluation_ids is None else evaluation_ids
+        ),
     )
     path.write_text(json.dumps(artifact.to_dict()), encoding="utf-8")
     return path
@@ -203,6 +206,11 @@ def test_generation_policy_signature_can_bind_external_replay_policy(tmp_path):
         model,
     ) = make_file_tree(tmp_path)
     policy = load_frozen_influence_policy(influence)
+    checkpoint_file = model / "weights.bin"
+    checkpoint_file.write_bytes(b"frozen checkpoint")
+    checkpoint_files = {
+        "weights.bin": hashlib.sha256(checkpoint_file.read_bytes()).hexdigest()
+    }
     external = tmp_path / "replay_policy.json"
     external.write_text(
         json.dumps(
@@ -210,6 +218,8 @@ def test_generation_policy_signature_can_bind_external_replay_policy(tmp_path):
                 "variant": "A11",
                 "controller": "trust_region",
                 "post_attack": "smooth_boundary",
+                "checkpoint": str(model),
+                "checkpoint_files": checkpoint_files,
             }
         ),
         encoding="utf-8",
@@ -233,6 +243,8 @@ def test_generation_policy_signature_can_bind_external_replay_policy(tmp_path):
                 "variant": "A11",
                 "controller": "disabled",
                 "post_attack": "smooth_boundary",
+                "checkpoint": str(model),
+                "checkpoint_files": checkpoint_files,
             }
         ),
         encoding="utf-8",
@@ -419,6 +431,12 @@ def test_adaptive_manifest_is_complete_before_any_generation(
         discovery_manifest=None,
         exploratory=False,
     )
+    semantic_manifest = tmp_path / "semantic_masks.json"
+    semantic_manifest.write_text(
+        json.dumps(build_semantic_mask_manifest(influence, [0, 1], mask_root)),
+        encoding="utf-8",
+    )
+    args.semantic_mask_manifest = str(semantic_manifest)
     args.selector_model = str(write_selector(tmp_path / "selector.json", args))
     monkeypatch.setattr(
         "scripts.run_individual_region_cci.load_celeba_resnet50",
@@ -577,6 +595,12 @@ def test_source_features_only_writes_candidate_rows_without_diffusion(
         discovery_manifest=None,
         exploratory=False,
     )
+    semantic_manifest = tmp_path / "semantic_masks.json"
+    semantic_manifest.write_text(
+        json.dumps(build_semantic_mask_manifest(influence, [0], mask_root)),
+        encoding="utf-8",
+    )
+    args.semantic_mask_manifest = str(semantic_manifest)
     monkeypatch.setattr(
         "scripts.run_individual_region_cci.load_celeba_resnet50",
         lambda *args, **kwargs: object(),
@@ -613,6 +637,10 @@ def test_source_features_only_writes_candidate_rows_without_diffusion(
         ("lower_lip", "mouth"),
     }
     assert set(FEATURE_NAMES).issubset(rows[0])
+    assert set(json.loads(rows[0]["semantic_mask_sha256"])) == {
+        "lower_lip",
+        "mouth",
+    }
     assert "output_path" not in rows[0]
     assert manifest["source_features_only"] is True
     assert manifest["source_feature_row_count"] == 2
@@ -620,3 +648,4 @@ def test_source_features_only_writes_candidate_rows_without_diffusion(
         (tmp_path / "features/source_feature_manifest.json").read_text()
     )
     assert len(feature_manifest["generation_policy_signature"]) == 64
+    assert len(feature_manifest["feature_signature"]) == 64

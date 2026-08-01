@@ -449,6 +449,7 @@ def test_graph_serialization_only_verifies_supported_positive_singletons():
             "relation": "classifier_counterfactual_influence",
         }
     ]
+    assert payload["verified_regions"] == ["mouth"]
     assert payload["provenance"]["classifier"] == "resnet50_multilabel_model.pth"
 
 

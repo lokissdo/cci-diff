@@ -19,6 +19,7 @@ if str(REPO_ROOT) not in sys.path:
 
 import numpy as np  # noqa: E402
 
+from cci_diff.concept_graph import sha256_file  # noqa: E402
 from cci_diff.individual_region_selection import (  # noqa: E402
     FrozenInfluencePolicy,
     load_frozen_influence_policy,
@@ -279,6 +280,14 @@ def fit_region_selector(
         raise ValueError(f"missing selector provenance: {sorted(missing_provenance)}")
     policy = load_frozen_influence_policy(graph_path)
     candidates = validate_candidate_family(candidate_family, policy)
+    declared_graph = provenance.get("influence_graph_sha256")
+    if declared_graph is not None and declared_graph != policy.graph_sha256:
+        raise ValueError("source feature manifest graph SHA-256 mismatch")
+    declared_candidates = provenance.get("candidate_region_sets")
+    if declared_candidates is not None and tuple(
+        sorted(_parse_regions(item) for item in declared_candidates)
+    ) != candidates:
+        raise ValueError("source feature manifest candidate family mismatch")
     normalized = _normalize_rows(rows, policy, candidates, thresholds)
     fit_rows = [row for row in normalized if row["cohort"] == "fit"]
     calibration_rows = [row for row in normalized if row["cohort"] == "calibration"]
@@ -292,9 +301,23 @@ def fit_region_selector(
         "calibration": calibration_ids,
         "evaluation": {int(value) for value in evaluation_ids},
     }
+    empty_cohorts = sorted(name for name, values in cohorts.items() if not values)
+    if empty_cohorts:
+        raise ValueError(
+            "all four selector cohorts must be non-empty: "
+            f"{empty_cohorts}"
+        )
     overlap = _pairwise_cohort_overlap(cohorts)
     if overlap:
         raise ValueError(f"cohort sample IDs must be pairwise disjoint: {overlap}")
+    declared_cohorts = provenance.get("declared_cohorts")
+    if declared_cohorts is not None:
+        frozen_declared = {
+            name: {int(value) for value in declared_cohorts.get(name, ())}
+            for name in cohorts
+        }
+        if frozen_declared != cohorts:
+            raise ValueError("fit inputs disagree with the frozen split manifest")
 
     model, cv_audit = choose_grouped_l2(
         _matrix(fit_rows),
@@ -402,13 +425,14 @@ def asdict_thresholds(thresholds: SafeSuccessThresholds) -> dict[str, float]:
 def provenance_from_manifests(
     source_feature_manifest: str | Path,
     split_manifest: str | Path,
+    source_features: str | Path | None = None,
 ) -> dict[str, Any]:
     """Build fitting provenance from already-frozen source/split artifacts."""
 
     source_path = Path(source_feature_manifest)
     split_path = Path(split_manifest)
     source = json.loads(source_path.read_text(encoding="utf-8"))
-    json.loads(split_path.read_text(encoding="utf-8"))
+    split = json.loads(split_path.read_text(encoding="utf-8"))
     required = (
         "feature_signature",
         "classifier_sha256",
@@ -419,6 +443,26 @@ def provenance_from_manifests(
         raise ValueError(
             f"source feature manifest lacks provenance: {missing}"
         )
+    raw_cohorts = split.get("cohorts")
+    cohort_names = ("discovery", "fit", "calibration", "evaluation")
+    if not isinstance(raw_cohorts, dict) or set(raw_cohorts) != set(cohort_names):
+        raise ValueError("split manifest must declare exactly four cohorts")
+    cohorts = {
+        name: tuple(int(value) for value in raw_cohorts[name])
+        for name in cohort_names
+    }
+    if any(not values for values in cohorts.values()):
+        raise ValueError("split manifest cohorts must all be non-empty")
+    if _pairwise_cohort_overlap({name: set(values) for name, values in cohorts.items()}):
+        raise ValueError("split manifest cohorts must be pairwise disjoint")
+    declared_source_ids = {int(value) for value in source.get("sample_ids", ())}
+    split_ids = {value for values in cohorts.values() for value in values}
+    if declared_source_ids != split_ids:
+        raise ValueError("source feature IDs disagree with split manifest")
+    if source_features is not None:
+        expected_digest = source.get("source_features_sha256")
+        if expected_digest != sha256_file(source_features):
+            raise ValueError("source feature CSV SHA-256 mismatch")
     return {
         name: str(source[name]) for name in required
     } | {
@@ -429,6 +473,9 @@ def provenance_from_manifests(
             split_path.read_bytes()
         ).hexdigest(),
         "software_versions": {"numpy": np.__version__},
+        "declared_cohorts": {name: list(values) for name, values in cohorts.items()},
+        "influence_graph_sha256": source.get("influence_graph_sha256"),
+        "candidate_region_sets": source.get("candidate_region_sets"),
     }
 
 
@@ -480,7 +527,6 @@ def build_arg_parser() -> argparse.ArgumentParser:
     parser.add_argument("--influence_graph", required=True)
     parser.add_argument("--source_features", required=True)
     parser.add_argument("--development_outcomes", required=True)
-    parser.add_argument("--provenance", default=None)
     parser.add_argument("--source_feature_manifest", default=None)
     parser.add_argument("--split_manifest", default=None)
     parser.add_argument("--discovery_ids", default=None)
@@ -492,23 +538,15 @@ def build_arg_parser() -> argparse.ArgumentParser:
 
 def main() -> int:
     args = build_arg_parser().parse_args()
-    if args.provenance is not None:
-        if args.source_feature_manifest is not None:
-            raise ValueError(
-                "use either provenance or source_feature_manifest, not both"
-            )
-        provenance_payload = json.loads(
-            Path(args.provenance).read_text(encoding="utf-8")
+    if args.source_feature_manifest is None or args.split_manifest is None:
+        raise ValueError(
+            "source_feature_manifest and split_manifest are required"
         )
-    else:
-        if args.source_feature_manifest is None or args.split_manifest is None:
-            raise ValueError(
-                "source_feature_manifest and split_manifest are required "
-                "when provenance is omitted"
-            )
-        provenance_payload = provenance_from_manifests(
-            args.source_feature_manifest, args.split_manifest
-        )
+    provenance_payload = provenance_from_manifests(
+        args.source_feature_manifest,
+        args.split_manifest,
+        args.source_features,
+    )
     candidate_family = None
     if args.candidate_family:
         candidate_family = json.loads(
@@ -522,8 +560,14 @@ def main() -> int:
         rows,
         args.output_dir,
         provenance=provenance_payload,
-        discovery_ids=_read_ids(args.discovery_ids),
-        evaluation_ids=_read_ids(args.evaluation_ids),
+        discovery_ids=(
+            _read_ids(args.discovery_ids)
+            or tuple(provenance_payload.get("declared_cohorts", {}).get("discovery", ()))
+        ),
+        evaluation_ids=(
+            _read_ids(args.evaluation_ids)
+            or tuple(provenance_payload.get("declared_cohorts", {}).get("evaluation", ()))
+        ),
         candidate_family=candidate_family,
     )
     return 0

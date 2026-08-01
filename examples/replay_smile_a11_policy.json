@@ -5,15 +5,60 @@
   "desired_value": 0,
   "variant": "A11",
   "checkpoint": "checkpoints/sd2-1-base",
+  "checkpoint_files": {
+    "feature_extractor/preprocessor_config.json": "2a1da83b5e1032aaeef397552ddb408dca0d8cd1dc58f61bf6abf38d6f33a0a2",
+    "model_index.json": "518553e098fdaa4153d9a92139e344e44f53bb329c22f383293e3099c4f1bad2",
+    "scheduler/scheduler_config.json": "11ac5627d7df0fa344b875c4b5722b1767a8a2aa1684c2cf8b4d614300127234",
+    "text_encoder/config.json": "7e33bfc475f6cf76e69b28b101993ca834d1f22ff4d35caefde32d63d4f42fba",
+    "text_encoder/model.fp16.safetensors": "681c555376658c81dc273f2d737a2aeb23ddb6d1d8e5b3a7064636d359a22668",
+    "text_encoder/model.safetensors": "cce6febb0b6d876ee5eb24af35e27e764eb4f9b1d0b7c026c8c3333d4cfc916c",
+    "text_encoder/pytorch_model.bin": "c3e254d7b61353497ea0be2c4013df4ea8f739ee88cffa0ba58cd085459ed565",
+    "text_encoder/pytorch_model.fp16.bin": "7bb11b1da63986aaaaefb5ef2100d34109c024ac640cacd9ed697150c1c57f01",
+    "tokenizer/merges.txt": "9fd691f7c8039210e0fced15865466c65820d09b63988b0174bfe25de299051a",
+    "tokenizer/special_tokens_map.json": "f118ab3a983206e4f32583448de6bd6aae4ee21869135cef1f5848a753cdaab6",
+    "tokenizer/tokenizer_config.json": "d562b18a0c6d32a168fce3d7a342fce64579ebacffb98fb71b0affc494fc32d8",
+    "tokenizer/vocab.json": "e089ad92ba36837a0d31433e555c8f45fe601ab5c221d4f607ded32d9f7a4349",
+    "unet/config.json": "ce0c6d379e3b1d3e1f79338de70c80a1e36f17a6372439a8249b6fb0dfa1b608",
+    "unet/diffusion_pytorch_model.bin": "a434f8fdbb51f080ac57a4377281241467c4efc1417b27646ffae989644de60c",
+    "unet/diffusion_pytorch_model.fp16.bin": "da861650fc7df96390abffcbb9bcf67b7c5566422fda5af9bc003605be65c5f3",
+    "unet/diffusion_pytorch_model.fp16.safetensors": "28ec9cf3b239c0751c201b1f6fb46b551df5862731b30a37aa1360101cb3fbab",
+    "unet/diffusion_pytorch_model.safetensors": "6dfae3e5f7d459b50f4b0850ead945972c75bb0e1897628933e169eb43974214",
+    "v2-1_512-ema-pruned.ckpt": "88ecb782561455673c4b78d05093494b9c539fc6bfc08f3a9a4a0dd7b0b10f36",
+    "v2-1_512-ema-pruned.safetensors": "df955bdf6b682338ea9b55dfc0d8f3475aadf4836e204893d28b82355e0956d2",
+    "v2-1_512-nonema-pruned.ckpt": "34dccb9e60d83a4ef963f51e9ff63548323a70024f8679095956d7c403b3ef4a",
+    "v2-1_512-nonema-pruned.safetensors": "fc4f9fe7528b2ee3de21971fb805bbf74d680bf1ab5b5f9c08379b0397b82a9d",
+    "vae/config.json": "424117cb534ce03497c41305ed868980123917b2b6abba4bbaa615e968772903",
+    "vae/diffusion_pytorch_model.bin": "1b4889b6b1d4ce7ae320a02dedaeff1780ad77d415ea0d744b476155c6377ddc",
+    "vae/diffusion_pytorch_model.fp16.bin": "44915add42092106e70bffac475aae4283b5e8167a8a0c5f55ccc667ee4ebeb5",
+    "vae/diffusion_pytorch_model.fp16.safetensors": "3e4c08995484ee61270175e9e7a072b66a6e4eeb5f0c266667fe1f45b90daf9a",
+    "vae/diffusion_pytorch_model.safetensors": "a1d993488569e928462932c8c38a0760b874d166399b14414135bd9c42df5815"
+  },
   "prompt": "(photo-realistic:1.2), ultra-high-resolution portrait of the same person, remove smiling: relaxed neutral facial expression, closed relaxed lips, no smile, preserve identity, natural expression, detailed skin texture, soft cinematic lighting",
   "seed": 42,
   "num_inference_steps": 35,
   "guidance_scale": 5.0,
+  "torch_dtype": "float32",
   "blending_start_percentage": 0.25,
   "mask_dilation": 8,
   "hook": "clean_constraint",
   "controller_mode": "trust_region",
   "projection": true,
+  "matched_arms": {
+    "A0": {
+      "hook": "clean_constraint",
+      "controller_mode": "disabled",
+      "projection": true
+    },
+    "A11": {
+      "hook": "clean_constraint",
+      "controller_mode": "trust_region",
+      "projection": true
+    }
+  },
+  "legacy_candidate_attestation": {
+    "allowed": true,
+    "reason": "The fixed 300-image candidate runs predate full checkpoint-policy fields in pilot_manifest.json; shared recorded fields and row graph digests are verified, while the exact invocation is attested by this frozen policy. New runs must emit generation_policy."
+  },
   "post_attack": {
     "mode": "smooth_boundary",
     "epsilon_schedule": [
