@@ -568,7 +568,7 @@ def run_development(
     if hasattr(args, "mask_root"):
         _write_semantic_mask_manifest(
             semantic_manifest_path,
-            cohort,
+            (*sorted(cohort.all_ids), *evaluation_ids),
             graph.verified_regions,
             Path(args.mask_root),
             influence_graph_sha256=sha256_file(graph_path),
@@ -729,7 +729,7 @@ def _write_development_outcomes(
 
 def _write_semantic_mask_manifest(
     path: Path,
-    cohort: DevelopmentCohort,
+    sample_ids: Iterable[int],
     verified_regions: tuple[str, ...],
     mask_root: Path,
     *,
@@ -738,7 +738,7 @@ def _write_semantic_mask_manifest(
     from cci_diff.region_screening import celebamask_component_path
 
     sample_masks = {}
-    for sample_id in sorted(cohort.all_ids):
+    for sample_id in sorted(set(int(value) for value in sample_ids)):
         available = {}
         for region in verified_regions:
             component = celebamask_component_path(

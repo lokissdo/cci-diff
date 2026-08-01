@@ -322,6 +322,80 @@ held-out IDs.
 
 ## Risk-controlled source-only mask selection
 
+### Generic 30-to-300 development workflow
+
+The current paper workflow is target- and direction-generic. It screens every
+CelebAMask-HQ semantic component from source images, retains six atomic
+components, and evaluates a four-wide A11 beam with at most six singleton,
+pair, and triple sets per level. It does not hardcode mouth or lip masks.
+
+One `--data_size` argument controls the development cohort. `30` allocates
+4 discovery, 10 fitting, and 16 calibration images; `300` allocates
+40/100/160. Other values of at least 15 use the same deterministic 2:5:8
+allocation. There is no separate smoke algorithm or relaxed calibration rule:
+
+```bash
+.venv-ml/bin/python scripts/run_generic_region_development.py \
+  --data_size 30 \
+  --eligible_ids_manifest data/candidate-source-ids.json \
+  --evaluation_ids_manifest data/paper-evaluation-ids.json \
+  --template_graph examples/graphs/remove_smile_clean_cci.json \
+  --generation_policy examples/replay_smile_a11_policy.json \
+  --image_root data/CelebAMask-HQ/CelebA-HQ-img \
+  --mask_root data/CelebAMask-HQ/CelebAMask-HQ-mask-anno \
+  --model_path checkpoints/sd2-1-base \
+  --classifier_path models/resnet50_multilabel_model.pth \
+  --identity_model_path models/facenet_vggface2.ts \
+  --cache_dir outputs/generic-development/a11-cache \
+  --output_dir outputs/generic-development/n30 \
+  --device auto
+```
+
+The candidate manifest is scanned using only source availability, target
+direction, face detection, and semantic-mask availability. The evaluation
+manifest must contain the external paper evaluation IDs; those IDs are
+excluded before discovery and need no candidate generations. The existing
+`outputs/attacked_a0_a11_smile300_seed42` cohort remains evaluation data and
+is not consumed by this development command.
+
+For the full development run, change `--data_size 30` to `300` and use a new
+run directory such as `n300`, while keeping the same `--cache_dir`. Stable
+role assignment preserves the 30-image members inside the 300-image cohort,
+and exact source-mask-policy A11 interventions are reused. Discovery, fitting,
+and calibration are rebuilt from the larger cohorts. The N=30 selector and
+graph are pipeline-validation artifacts, not final paper artifacts.
+
+On Kaggle, edit the path bundle in
+`examples/kaggle_generic_development.py`. It invokes this same CLI under
+`/kaggle/working`; set `data_size=30` first, then `300`. The frozen generation
+policy must name the attached checkpoint directory and contain its exact
+`checkpoint_files` inventory. `--device auto` selects CUDA, then MPS, then
+CPU, and model download remains disabled.
+
+After the N=300 selector is frozen, generate the external evaluation cohort
+exactly once per source-selected mask:
+
+```bash
+.venv-ml/bin/python scripts/run_individual_region_cci.py \
+  --generate_selected_a11 \
+  --influence_graph outputs/generic-development/n300/influence_graph.json \
+  --template_graph examples/graphs/remove_smile_clean_cci.json \
+  --sample_ids $(.venv-ml/bin/python -c 'import json; print(*json.load(open("data/paper-evaluation-ids.json"))["sample_ids"])') \
+  --model_path checkpoints/sd2-1-base \
+  --classifier_path models/resnet50_multilabel_model.pth \
+  --identity_model_path models/facenet_vggface2.ts \
+  --generation_policy_manifest examples/replay_smile_a11_policy.json \
+  --semantic_mask_manifest outputs/generic-development/n300/semantic_mask_manifest.json \
+  --selector_model outputs/generic-development/n300/backend/selector/selector_model.json \
+  --intervention_cache_dir outputs/generic-development/a11-cache \
+  --output_dir outputs/generic-development/paper-evaluation-a11 \
+  --device auto
+```
+
+This mode validates and hashes every source-only decision before the first
+cache lookup or generation. It runs A11 only—no A0 arm, mask escalation,
+generated-output reranking, oracle ranking, or metric-based selection.
+
 The risk-controlled selector chooses the smallest candidate only after it
 passes both source saliency coverage and calibrated joint target, identity,
 and locality risk gates. The initial smile family is `mouth` versus
