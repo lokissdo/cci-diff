@@ -9,6 +9,7 @@ import hashlib
 import json
 import subprocess
 import sys
+from dataclasses import replace
 from pathlib import Path
 from typing import Any, Mapping, Sequence
 
@@ -24,6 +25,12 @@ from cci_diff.classifiers.celeba_resnet50 import (  # noqa: E402
 )
 from cci_diff.concept_graph import load_concept_graph, sha256_file  # noqa: E402
 from cci_diff.counterfactual_graph import InterventionObservation  # noqa: E402
+from cci_diff.intervention_cache import (  # noqa: E402
+    InterventionCacheKey,
+    cache_key_for,
+    load_cached_intervention,
+    store_cached_intervention,
+)
 from cci_diff.region_screening import (  # noqa: E402
     build_union_mask,
     canonical_region_sets,
@@ -185,7 +192,43 @@ def build_intervention_command(
     seed: int,
     prompt: str,
 ) -> list[str]:
-    """Build a clean-CCI command without any post-generation attack."""
+    """Build a legacy clean-CCI command or an exact frozen A11 command."""
+
+    policy_path = getattr(args, "generation_policy", None)
+    policy = _load_a11_generation_policy(policy_path) if policy_path else None
+    model_path = str(policy.get("checkpoint", args.model_path)) if policy else args.model_path
+    inference_steps = (
+        policy["num_inference_steps"] if policy else args.num_inference_steps
+    )
+    guidance_scale = policy["guidance_scale"] if policy else args.guidance_scale
+    blending_start = (
+        policy["blending_start_percentage"]
+        if policy
+        else args.blending_start_percentage
+    )
+    mask_dilation = (
+        policy.get("mask_dilation", policy.get("generation_mask_dilation", 0))
+        if policy
+        else args.generation_mask_dilation
+    )
+    mask_feather = (
+        policy.get("mask_feather", policy.get("generation_mask_feather", 3.0))
+        if policy
+        else args.generation_mask_feather
+    )
+    torch_dtype = (
+        policy["torch_dtype"]
+        if policy
+        else "float16"
+        if getattr(args, "torch_dtype", "auto") == "auto"
+        and args.device.startswith("cuda")
+        else "float32"
+        if getattr(args, "torch_dtype", "auto") == "auto"
+        else args.torch_dtype
+    )
+    controller_mode = policy["controller_mode"] if policy else "feedback"
+    hook = policy["hook"] if policy else "clean_constraint"
+    effective_prompt = str(policy.get("prompt", prompt)) if policy else prompt
 
     command = [
         args.python_executable,
@@ -193,37 +236,30 @@ def build_intervention_command(
         "--output_dir",
         str(output_dir),
         "--prompt",
-        prompt,
+        effective_prompt,
         "--model_path",
-        args.model_path,
+        model_path,
         "--local_files_only",
         "--device",
         args.device,
         "--torch_dtype",
-        (
-            "float16"
-            if getattr(args, "torch_dtype", "auto") == "auto"
-            and args.device.startswith("cuda")
-            else "float32"
-            if getattr(args, "torch_dtype", "auto") == "auto"
-            else args.torch_dtype
-        ),
+        str(torch_dtype),
         "--batch_size",
         "1",
         "--num_inference_steps",
-        str(args.num_inference_steps),
+        str(inference_steps),
         "--guidance_scale",
-        str(args.guidance_scale),
+        str(guidance_scale),
         "--blending_start_percentage",
-        str(args.blending_start_percentage),
+        str(blending_start),
         "--seed",
         str(seed),
         "--generation_mask_dilation",
-        str(args.generation_mask_dilation),
+        str(mask_dilation),
         "--generation_mask_feather",
-        str(args.generation_mask_feather),
+        str(mask_feather),
         "--cci_hook",
-        "clean_constraint",
+        hook,
         "--cci_graph",
         str(graph_path),
         "--cci_sample_bindings",
@@ -233,11 +269,67 @@ def build_intervention_command(
         "--identity_model_path",
         args.identity_model_path,
         "--cci_controller_mode",
-        "feedback",
+        controller_mode,
     ]
     if getattr(args, "allow_model_download", False):
         command.remove("--local_files_only")
+    if policy:
+        if not policy["projection"]:
+            command.append("--cci_disable_target_projection")
+        post_attack = policy["post_attack"]
+        if post_attack["mode"] != "none":
+            schedule = post_attack["epsilon_schedule"]
+            if isinstance(schedule, str):
+                schedule_value = schedule
+            else:
+                schedule_value = ",".join(str(value) for value in schedule)
+            command.extend(
+                [
+                    "--cci_post_attack",
+                    str(post_attack["mode"]),
+                    "--cci_post_attack_epsilon_schedule",
+                    schedule_value,
+                    "--cci_post_attack_boundary_margin",
+                    str(post_attack["boundary_margin"]),
+                ]
+            )
     return command
+
+
+def _load_a11_generation_policy(path: str | Path) -> dict[str, Any]:
+    policy_path = Path(path)
+    payload = json.loads(policy_path.read_text(encoding="utf-8"))
+    if not isinstance(payload, dict):
+        raise ValueError("generation_policy must contain a JSON object")
+    expected = {
+        "variant": "A11",
+        "hook": "clean_constraint",
+        "controller_mode": "trust_region",
+    }
+    for field, value in expected.items():
+        if payload.get(field) != value:
+            raise ValueError(
+                f"A11 generation policy requires {field}={value!r}"
+            )
+    if payload.get("projection") is not True:
+        raise ValueError("A11 generation policy requires target projection")
+    required = (
+        "num_inference_steps",
+        "guidance_scale",
+        "blending_start_percentage",
+        "torch_dtype",
+        "post_attack",
+    )
+    missing = [field for field in required if field not in payload]
+    if missing:
+        raise ValueError(f"A11 generation policy is missing fields: {missing}")
+    post_attack = payload["post_attack"]
+    if not isinstance(post_attack, dict):
+        raise ValueError("post_attack must be a JSON object")
+    for field in ("mode", "epsilon_schedule", "boundary_margin"):
+        if field not in post_attack:
+            raise ValueError(f"post_attack is missing {field}")
+    return payload
 
 
 def load_completed_observation(
@@ -406,6 +498,11 @@ def run_interventions(args: argparse.Namespace) -> dict[str, Any]:
     prompt = _prompt_for_graph(args.template_graph)
     output_dir = Path(args.output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
+    cache_root_value = getattr(args, "intervention_cache_dir", None)
+    cache_root = Path(cache_root_value) if cache_root_value else None
+    cache_static = (
+        _cache_static_digests(args) if cache_root is not None else None
+    )
     manifest = {
         "version": 2,
         "target": target,
@@ -468,6 +565,10 @@ def run_interventions(args: argparse.Namespace) -> dict[str, Any]:
             "generation_mask_feather": args.generation_mask_feather,
         },
         "post_attack": "disabled",
+        "generation_policy": getattr(args, "generation_policy", None),
+        "intervention_cache_dir": (
+            str(cache_root) if cache_root is not None else None
+        ),
     }
     (output_dir / "intervention_manifest.json").write_text(
         json.dumps(manifest, indent=2, allow_nan=False),
@@ -499,7 +600,7 @@ def run_interventions(args: argparse.Namespace) -> dict[str, Any]:
                 policy_dir = (
                     output_dir / "policies" / f"{sample_id:05d}" / slug
                 )
-                graph_path, binding_path, _ = materialize_region_policy(
+                graph_path, binding_path, union_path = materialize_region_policy(
                     args.template_graph,
                     source,
                     all_components,
@@ -507,6 +608,17 @@ def run_interventions(args: argparse.Namespace) -> dict[str, Any]:
                     policy_dir,
                 )
                 for seed in args.seeds:
+                    cache_key = (
+                        _intervention_cache_key(
+                            cache_static,
+                            source=source,
+                            union_mask=union_path,
+                            graph=graph_path,
+                            seed=seed,
+                        )
+                        if cache_static is not None
+                        else None
+                    )
                     run_dir = (
                         output_dir
                         / "runs"
@@ -514,6 +626,17 @@ def run_interventions(args: argparse.Namespace) -> dict[str, Any]:
                         / f"seed_{seed}"
                         / slug
                     )
+                    if cache_key is not None:
+                        run_dir = run_dir / cache_key.digest
+                        cached = load_cached_intervention(cache_root, cache_key)
+                    else:
+                        cached = None
+                    if cached is not None:
+                        rows.append(_observation_from_cache(cached))
+                        _write_observations(
+                            output_dir / "intervention_results.csv", rows
+                        )
+                        continue
                     try:
                         row = load_completed_observation(
                             run_dir,
@@ -571,6 +694,14 @@ def run_interventions(args: argparse.Namespace) -> dict[str, Any]:
                             seed=seed,
                             regions=regions,
                         )
+                    if cache_key is not None:
+                        cached = store_cached_intervention(
+                            cache_root,
+                            cache_key,
+                            row,
+                            _cache_artifacts(row, run_dir),
+                        )
+                        row = _observation_from_cache(cached)
                     rows.append(row)
                     _write_observations(
                         output_dir / "intervention_results.csv", rows
@@ -654,6 +785,14 @@ def validate_args(args: argparse.Namespace) -> None:
         raise ValueError("num_inference_steps must be positive")
     if not 0.5 < args.stop_flip_rate <= 1.0:
         raise ValueError("stop_flip_rate must be in (0.5, 1]")
+    if getattr(args, "intervention_cache_dir", None) and not getattr(
+        args, "generation_policy", None
+    ):
+        raise ValueError(
+            "intervention_cache_dir requires a frozen generation_policy"
+        )
+    if getattr(args, "generation_policy", None):
+        _load_a11_generation_policy(args.generation_policy)
 
 
 def build_arg_parser() -> argparse.ArgumentParser:
@@ -686,6 +825,16 @@ def build_arg_parser() -> argparse.ArgumentParser:
     parser.add_argument("--classifier_path", required=True)
     parser.add_argument("--identity_model_path", required=True)
     parser.add_argument("--output_dir", required=True)
+    parser.add_argument(
+        "--generation_policy",
+        default=None,
+        help="Frozen A11 generation-policy JSON for development runs.",
+    )
+    parser.add_argument(
+        "--intervention_cache_dir",
+        default=None,
+        help="Shared content-addressed A11 cache (requires generation_policy).",
+    )
     parser.add_argument("--device", default="mps")
     parser.add_argument(
         "--torch_dtype",
@@ -747,6 +896,98 @@ def _artifact_path(
 
 def _optional_float(value: Any) -> float | None:
     return None if value is None else float(value)
+
+
+def _cache_static_digests(args: argparse.Namespace) -> dict[str, str]:
+    policy_path = Path(args.generation_policy)
+    policy = _load_a11_generation_policy(policy_path)
+    checkpoint = Path(str(policy.get("checkpoint", args.model_path)))
+    return {
+        "checkpoint_sha256": _checkpoint_content_sha256(checkpoint, policy),
+        "classifier_sha256": sha256_file(args.classifier_path),
+        "identity_sha256": sha256_file(args.identity_model_path),
+        "policy_sha256": sha256_file(policy_path),
+    }
+
+
+def _checkpoint_content_sha256(
+    checkpoint: Path,
+    policy: Mapping[str, Any],
+) -> str:
+    if checkpoint.is_file():
+        return sha256_file(checkpoint)
+    if checkpoint.is_dir():
+        inventory = {
+            str(path.relative_to(checkpoint)): sha256_file(path)
+            for path in sorted(checkpoint.rglob("*"))
+            if path.is_file()
+            and not any(
+                part.startswith(".")
+                for part in path.relative_to(checkpoint).parts
+            )
+            and path.name != "README.md"
+        }
+    else:
+        inventory = policy.get("checkpoint_files")
+        if not isinstance(inventory, dict) or not inventory:
+            raise FileNotFoundError(
+                "Checkpoint is unavailable and generation_policy has no "
+                "checkpoint_files inventory"
+            )
+    return hashlib.sha256(
+        json.dumps(
+            inventory,
+            sort_keys=True,
+            separators=(",", ":"),
+            allow_nan=False,
+        ).encode("utf-8")
+    ).hexdigest()
+
+
+def _intervention_cache_key(
+    static: Mapping[str, str],
+    *,
+    source: Path,
+    union_mask: Path,
+    graph: Path,
+    seed: int,
+) -> InterventionCacheKey:
+    return cache_key_for(
+        source_sha256=sha256_file(source),
+        mask_sha256=sha256_file(union_mask),
+        checkpoint_sha256=static["checkpoint_sha256"],
+        classifier_sha256=static["classifier_sha256"],
+        identity_sha256=static["identity_sha256"],
+        graph_sha256=sha256_file(graph),
+        policy_sha256=static["policy_sha256"],
+        seed=seed,
+    )
+
+
+def _cache_artifacts(
+    observation: InterventionObservation,
+    run_dir: Path,
+) -> dict[str, Path]:
+    artifacts = {
+        "output": Path(str(observation.output_path)),
+        "audit": Path(str(observation.audit_path)),
+    }
+    for name, filename in (
+        ("semantic_mask", "semantic_mask.png"),
+        ("generation_mask", "generation_mask.png"),
+    ):
+        candidate = run_dir / filename
+        if candidate.is_file():
+            artifacts[name] = candidate
+    return artifacts
+
+
+def _observation_from_cache(cached: Any) -> InterventionObservation:
+    return replace(
+        cached.observation,
+        output_path=str(cached.artifacts["output"]),
+        audit_path=str(cached.artifacts["audit"]),
+    )
 
 
 def _load_binary_component(path: Path) -> np.ndarray:

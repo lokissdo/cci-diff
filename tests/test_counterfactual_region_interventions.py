@@ -1,9 +1,12 @@
 import json
 from argparse import Namespace
 from pathlib import Path
+from types import SimpleNamespace
 
 import numpy as np
 from PIL import Image
+
+import scripts.run_counterfactual_region_interventions as interventions
 
 from scripts.run_counterfactual_region_interventions import (
     build_arg_parser,
@@ -247,6 +250,60 @@ def test_build_intervention_command_can_download_public_model(tmp_path):
     assert "--local_files_only" not in command
 
 
+def test_build_intervention_command_uses_frozen_a11_policy(tmp_path):
+    policy_path = tmp_path / "a11-policy.json"
+    policy_path.write_text(
+        json.dumps(
+            {
+                "version": 1,
+                "variant": "A11",
+                "hook": "clean_constraint",
+                "controller_mode": "trust_region",
+                "projection": True,
+                "num_inference_steps": 40,
+                "guidance_scale": 6.0,
+                "blending_start_percentage": 0.3,
+                "mask_dilation": 4,
+                "mask_feather": 2.0,
+                "torch_dtype": "float16",
+                "post_attack": {
+                    "mode": "smooth_boundary",
+                    "epsilon_schedule": [0.05, 0.1],
+                    "boundary_margin": 0.03,
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+    args = Namespace(
+        python_executable="python",
+        model_path="checkpoint",
+        allow_model_download=False,
+        device="cuda",
+        classifier_path="classifier.pth",
+        identity_model_path="identity.ts",
+        generation_policy=str(policy_path),
+    )
+
+    command = build_intervention_command(
+        args,
+        graph_path=tmp_path / "graph.json",
+        binding_path=tmp_path / "binding.json",
+        output_dir=tmp_path / "run",
+        seed=42,
+        prompt="neutral expression",
+    )
+    joined = " ".join(command)
+
+    assert "--cci_controller_mode trust_region" in joined
+    assert "--num_inference_steps 40" in joined
+    assert "--generation_mask_dilation 4" in joined
+    assert "--generation_mask_feather 2.0" in joined
+    assert "--cci_post_attack smooth_boundary" in joined
+    assert "--cci_post_attack_epsilon_schedule 0.05,0.1" in joined
+    assert "--cci_post_attack_boundary_margin 0.03" in joined
+
+
 def test_load_completed_observation_reads_audit_and_spatial_metrics(tmp_path):
     graph, source, components = make_policy_inputs(tmp_path)
     run_dir = tmp_path / "run"
@@ -365,3 +422,124 @@ def test_intervention_cli_defaults_to_auto_dtype_for_cuda_portability():
     )
 
     assert args.torch_dtype == "auto"
+
+
+def test_second_content_addressed_run_skips_subprocess(tmp_path, monkeypatch):
+    source_root = tmp_path / "images"
+    source_root.mkdir()
+    Image.new("RGB", (2, 2), "gray").save(source_root / "1.jpg")
+    template = tmp_path / "template.json"
+    template.write_text("{}", encoding="utf-8")
+    calls = []
+
+    monkeypatch.setattr(interventions, "validate_args", lambda args: None)
+    monkeypatch.setattr(
+        interventions,
+        "load_concept_graph",
+        lambda path: SimpleNamespace(
+            intervention=SimpleNamespace(concept="Smiling", desired_value=0)
+        ),
+    )
+    monkeypatch.setattr(
+        interventions, "resolve_celeba_attribute_index", lambda target: 31
+    )
+    monkeypatch.setattr(
+        interventions, "canonical_region_sets", lambda *args, **kwargs: (("mouth",),)
+    )
+    monkeypatch.setattr(
+        interventions,
+        "deduplicate_region_sets",
+        lambda *args, **kwargs: ((('mouth',),), {}, {('mouth',): "f" * 64}),
+    )
+    monkeypatch.setattr(interventions, "_prompt_for_graph", lambda path: "prompt")
+    monkeypatch.setattr(
+        interventions,
+        "_cache_static_digests",
+        lambda args: {
+            "checkpoint_sha256": "a" * 64,
+            "classifier_sha256": "b" * 64,
+            "identity_sha256": "c" * 64,
+            "policy_sha256": "d" * 64,
+        },
+    )
+
+    def materialize(graph, source, components, regions, output_dir):
+        destination = Path(output_dir)
+        destination.mkdir(parents=True, exist_ok=True)
+        graph_path = destination / "graph.json"
+        binding_path = destination / "binding.json"
+        union_path = destination / "target_region.png"
+        graph_path.write_text("{}", encoding="utf-8")
+        binding_path.write_text("{}", encoding="utf-8")
+        union_path.write_bytes(b"mask")
+        return graph_path, binding_path, union_path
+
+    monkeypatch.setattr(interventions, "materialize_region_policy", materialize)
+
+    def build_command(args, **kwargs):
+        return ["fake", str(kwargs["output_dir"])]
+
+    monkeypatch.setattr(interventions, "build_intervention_command", build_command)
+
+    def run(command, **kwargs):
+        calls.append(command)
+        run_dir = Path(command[1])
+        run_dir.mkdir(parents=True, exist_ok=True)
+        (run_dir / "done").write_text("yes", encoding="utf-8")
+        return SimpleNamespace(returncode=0)
+
+    monkeypatch.setattr(interventions.subprocess, "run", run)
+
+    def load(run_dir, **kwargs):
+        run_dir = Path(run_dir)
+        if not (run_dir / "done").is_file():
+            raise FileNotFoundError
+        output = run_dir / "output.png"
+        audit = run_dir / "audit.json"
+        output.write_bytes(b"image")
+        audit.write_text("{}", encoding="utf-8")
+        return interventions.InterventionObservation(
+            target=kwargs["target"],
+            desired_value=kwargs["desired_value"],
+            sample_id=kwargs["sample_id"],
+            seed=kwargs["seed"],
+            regions=kwargs["regions"],
+            source_probability=0.9,
+            output_probability=0.4,
+            mask_fraction=0.1,
+            output_path=str(output),
+            audit_path=str(audit),
+        )
+
+    monkeypatch.setattr(interventions, "load_completed_observation", load)
+
+    def args(output_dir):
+        return Namespace(
+            template_graph=str(template),
+            sample_ids=[1],
+            candidate_regions=["mouth"],
+            max_set_size=1,
+            seeds=[42],
+            mask_root=str(tmp_path / "masks"),
+            image_root=str(source_root),
+            output_dir=str(output_dir),
+            intervention_cache_dir=str(tmp_path / "cache"),
+            generation_policy=str(tmp_path / "policy.json"),
+            stop_flip_rate=0.96,
+            disable_early_stop=True,
+            classifier_path="classifier",
+            identity_model_path="identity",
+            model_path="checkpoint",
+            num_inference_steps=35,
+            guidance_scale=5.0,
+            blending_start_percentage=0.25,
+            generation_mask_dilation=0,
+            generation_mask_feather=3.0,
+            dry_run=False,
+            continue_on_error=False,
+        )
+
+    interventions.run_interventions(args(tmp_path / "first"))
+    interventions.run_interventions(args(tmp_path / "second"))
+
+    assert len(calls) == 1
