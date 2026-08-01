@@ -734,8 +734,10 @@ def select_risk_controlled_regions(
         raise ValueError("selector target does not match the frozen graph")
     if artifact.graph_sha256 != policy.graph_sha256:
         raise ValueError("selector graph digest does not match the frozen graph")
-    if artifact.candidate_region_sets != policy.candidate_region_sets:
-        raise ValueError("selector candidate family does not match the frozen graph")
+    if not set(artifact.candidate_region_sets).issubset(
+        policy.candidate_region_sets
+    ):
+        raise ValueError("selector candidate family contains a non-graph candidate")
     if artifact.fallback_regions != policy.fallback_regions:
         raise ValueError("selector fallback does not match the frozen graph")
 

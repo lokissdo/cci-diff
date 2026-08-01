@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import argparse
 import csv
+import hashlib
 import json
 import subprocess
 import sys
@@ -34,6 +35,13 @@ from cci_diff.individual_region_selection import (  # noqa: E402
 )
 from cci_diff.post_attack import gradcam_pp_saliency  # noqa: E402
 from cci_diff.region_screening import celebamask_component_path  # noqa: E402
+from cci_diff.risk_controlled_selection import (  # noqa: E402
+    FrozenSelectorArtifact,
+    RiskControlledSelection,
+    extract_candidate_feature_rows,
+    select_risk_controlled_regions,
+    source_feature_signature,
+)
 from scripts.run_counterfactual_region_interventions import (  # noqa: E402
     _prompt_for_graph,
     build_intervention_command,
@@ -58,6 +66,71 @@ def source_requires_flip(
     return probability >= threshold if desired_value == 0 else probability < threshold
 
 
+def _canonical_json_bytes(payload: Any) -> bytes:
+    return json.dumps(
+        payload,
+        sort_keys=True,
+        separators=(",", ":"),
+        allow_nan=False,
+    ).encode("utf-8")
+
+
+def generation_policy_signature(
+    args: argparse.Namespace,
+    frozen_policy: FrozenInfluencePolicy,
+) -> str:
+    """Hash every generation setting that selector calibration depends on."""
+
+    payload = {
+        "target": frozen_policy.target,
+        "desired_value": frozen_policy.desired_value,
+        "model_path": str(Path(args.model_path)),
+        "template_graph_sha256": sha256_file(args.template_graph),
+        "prompt": _prompt_for_graph(args.template_graph),
+        "seed": args.seed,
+        "num_inference_steps": args.num_inference_steps,
+        "guidance_scale": args.guidance_scale,
+        "blending_start_percentage": args.blending_start_percentage,
+        "generation_mask_dilation": args.generation_mask_dilation,
+        "generation_mask_feather": args.generation_mask_feather,
+        "controller": "clean_constraint_feedback",
+        "post_attack": "disabled",
+        "output_reranking": "disabled",
+        "region_escalation": "disabled",
+    }
+    return hashlib.sha256(_canonical_json_bytes(payload)).hexdigest()
+
+
+def selector_feature_signature(
+    args: argparse.Namespace,
+    frozen_policy: FrozenInfluencePolicy,
+    candidate_region_sets: tuple[tuple[str, ...], ...] | None = None,
+) -> str:
+    """Hash the source-only feature extraction contract for this run."""
+
+    return source_feature_signature(
+        {
+            "influence_graph_sha256": frozen_policy.graph_sha256,
+            "candidate_region_sets": [
+                list(regions)
+                for regions in (
+                    candidate_region_sets
+                    if candidate_region_sets is not None
+                    else frozen_policy.candidate_region_sets
+                )
+            ],
+            "classifier_sha256": sha256_file(args.classifier_path),
+            "classifier_input_size": args.classifier_input_size,
+            "gradcam_method": "gradcam_pp",
+            "semantic_mask_root": str(Path(args.mask_root)),
+            "semantic_resize": "nearest",
+            "generation_policy_signature": generation_policy_signature(
+                args, frozen_policy
+            ),
+        }
+    )
+
+
 def prepare_individual_policy(
     *,
     source_path: str | Path,
@@ -70,7 +143,14 @@ def prepare_individual_policy(
     coverage_threshold: float,
     seed: int,
     output_dir: str | Path,
-) -> tuple[IndividualRegionSelection, Path, Path, Path]:
+    selector_artifact: FrozenSelectorArtifact | None = None,
+    selector_sha256: str | None = None,
+) -> tuple[
+    IndividualRegionSelection | RiskControlledSelection,
+    Path,
+    Path,
+    Path,
+]:
     """Select source-only regions and materialize one execution policy."""
 
     if not source_requires_flip(
@@ -93,12 +173,26 @@ def prepare_individual_policy(
                     Image.Resampling.NEAREST,
                 )
             )
-    selection = select_individual_region_set(
-        saliency_array,
-        masks,
-        frozen_policy,
-        coverage_threshold=coverage_threshold,
-    )
+    if selector_artifact is None:
+        selection = select_individual_region_set(
+            saliency_array,
+            masks,
+            frozen_policy,
+            coverage_threshold=coverage_threshold,
+        )
+    else:
+        feature_rows = extract_candidate_feature_rows(
+            source_probability,
+            saliency_array,
+            masks,
+            frozen_policy,
+            candidate_region_sets=selector_artifact.candidate_region_sets,
+        )
+        selection = select_risk_controlled_regions(
+            feature_rows,
+            frozen_policy,
+            selector_artifact,
+        )
     destination = Path(output_dir)
     graph_path, binding_path, union_path = materialize_region_policy(
         template_graph_path,
@@ -115,6 +209,7 @@ def prepare_individual_policy(
         seed=seed,
         frozen_policy=frozen_policy,
         execution_graph_path=graph_path,
+        selector_sha256=selector_sha256,
     )
     (destination / "selection.json").write_text(
         json.dumps(record, indent=2, allow_nan=False),
@@ -138,6 +233,17 @@ def run_individual_cci(args: argparse.Namespace) -> dict[str, Any]:
         raise ValueError("Template and frozen influence graph targets disagree")
     _validate_discovery_separation(args)
 
+    selector_artifact = None
+    selector_sha256 = None
+    selector_path_value = getattr(args, "selector_model", None)
+    if selector_path_value:
+        selector_path = Path(selector_path_value)
+        selector_artifact = FrozenSelectorArtifact.from_dict(
+            json.loads(selector_path.read_text(encoding="utf-8"))
+        )
+        selector_sha256 = sha256_file(selector_path)
+        _validate_selector_for_run(selector_artifact, frozen, args)
+
     label_index = resolve_celeba_attribute_index(frozen.target)
     classifier = load_celeba_resnet50(
         args.classifier_path,
@@ -148,7 +254,11 @@ def run_individual_cci(args: argparse.Namespace) -> dict[str, Any]:
     output_dir.mkdir(parents=True, exist_ok=True)
     frozen_config = {
         "version": 1,
-        "policy_type": "source_gradcam_individual_region",
+        "policy_type": (
+            "risk_controlled_source_only_v1"
+            if selector_artifact is not None
+            else "source_gradcam_individual_region"
+        ),
         "influence_graph": args.influence_graph,
         "influence_graph_sha256": frozen.graph_sha256,
         "template_graph": args.template_graph,
@@ -158,9 +268,24 @@ def run_individual_cci(args: argparse.Namespace) -> dict[str, Any]:
         "label_index": label_index,
         "verified_regions": list(frozen.verified_regions),
         "fallback_regions": list(frozen.fallback_regions),
+        "candidate_region_sets": [
+            list(regions) for regions in frozen.candidate_region_sets
+        ],
         "coverage_threshold": args.coverage_threshold,
         "classifier_path": args.classifier_path,
         "classifier_sha256": sha256_file(args.classifier_path),
+        "selector_model": selector_path_value,
+        "selector_sha256": selector_sha256,
+        "feature_signature": (
+            selector_feature_signature(
+                args, frozen, selector_artifact.candidate_region_sets
+            )
+            if selector_artifact is not None
+            else None
+        ),
+        "generation_policy_signature": generation_policy_signature(
+            args, frozen
+        ),
         "seed": args.seed,
         "generation": {
             "num_inference_steps": args.num_inference_steps,
@@ -180,10 +305,14 @@ def run_individual_cci(args: argparse.Namespace) -> dict[str, Any]:
     )
 
     selections: list[dict[str, Any]] = []
+    prepared: list[dict[str, Any]] = []
     results: list[dict[str, Any]] = []
     failures = []
     attempted = 0
     prompt = _prompt_for_graph(args.template_graph)
+
+    # Phase one is source-only. Every decision is completed before any
+    # generated output or candidate run is read.
     for sample_id in args.sample_ids:
         source = Path(args.image_root) / f"{sample_id}.jpg"
         try:
@@ -218,6 +347,8 @@ def run_individual_cci(args: argparse.Namespace) -> dict[str, Any]:
                     coverage_threshold=args.coverage_threshold,
                     seed=args.seed,
                     output_dir=policy_dir,
+                    selector_artifact=selector_artifact,
+                    selector_sha256=selector_sha256,
                 )
             )
             selection_row = _selection_payload(
@@ -228,15 +359,61 @@ def run_individual_cci(args: argparse.Namespace) -> dict[str, Any]:
                 seed=args.seed,
                 frozen_policy=frozen,
                 execution_graph_path=graph_path,
+                selector_sha256=selector_sha256,
             )
             selections.append(selection_row)
-            _write_rows(
-                output_dir / "individual_selections.csv",
-                selections,
+            prepared.append(
+                {
+                    "sample_id": sample_id,
+                    "selection": selection,
+                    "graph_path": graph_path,
+                    "binding_path": binding_path,
+                }
             )
-            if args.dry_run:
-                continue
+        except (
+            FileNotFoundError,
+            ValueError,
+            KeyError,
+            json.JSONDecodeError,
+        ) as error:
+            failure = {
+                "sample_id": sample_id,
+                "stage": "selection_or_validation",
+                "error": str(error),
+            }
+            failures.append(failure)
+            _append_jsonl(output_dir / "failures.jsonl", failure)
+            if not args.continue_on_error:
+                raise
 
+    _write_rows(output_dir / "individual_selections.csv", selections)
+    _write_rows(output_dir / "adaptive_selections.csv", selections)
+    requested_manifest = getattr(args, "selection_manifest", None)
+    selection_manifest_path = Path(requested_manifest) if requested_manifest else (
+        output_dir / "adaptive_selection_manifest.json"
+    )
+    selection_manifest_path, selection_manifest_sha256 = (
+        write_selection_manifest(
+            selection_manifest_path,
+            selections,
+            frozen_policy=frozen,
+            selector_sha256=selector_sha256,
+            feature_signature=frozen_config["feature_signature"],
+            generation_signature=frozen_config[
+                "generation_policy_signature"
+            ],
+        )
+    )
+
+    selection_only = bool(getattr(args, "selection_only", False))
+    if not args.dry_run and not selection_only:
+        # Phase two may read completed outputs or launch exactly one generation
+        # for each already-frozen source decision.
+        for item in prepared:
+            sample_id = item["sample_id"]
+            selection = item["selection"]
+            graph_path = item["graph_path"]
+            binding_path = item["binding_path"]
             run_dir = output_dir / "runs" / f"{sample_id:05d}"
             observation = None
             if _audit_matches_execution_graph(run_dir, graph_path):
@@ -302,30 +479,20 @@ def run_individual_cci(args: argparse.Namespace) -> dict[str, Any]:
                     "coverage_threshold": selection.coverage_threshold,
                     "selected_mask_fraction": selection.mask_fraction,
                     "fallback_used": selection.fallback_used,
+                    "selection_manifest_sha256": (
+                        selection_manifest_sha256
+                    ),
                 }
             )
             results.append(result)
             _write_rows(output_dir / "individual_results.csv", results)
-        except (
-            FileNotFoundError,
-            ValueError,
-            KeyError,
-            json.JSONDecodeError,
-        ) as error:
-            failure = {
-                "sample_id": sample_id,
-                "stage": "selection_or_validation",
-                "error": str(error),
-            }
-            failures.append(failure)
-            _append_jsonl(output_dir / "failures.jsonl", failure)
-            if not args.continue_on_error:
-                raise
 
     manifest = {
         **frozen_config,
         "sample_ids": args.sample_ids,
         "selection_count": len(selections),
+        "selection_manifest_path": str(selection_manifest_path),
+        "selection_manifest_sha256": selection_manifest_sha256,
         "attempted_generations": attempted,
         "completed_generations": len(results),
         "failed_generations": sum(
@@ -333,6 +500,7 @@ def run_individual_cci(args: argparse.Namespace) -> dict[str, Any]:
         ),
         "failures": failures,
         "dry_run": args.dry_run,
+        "selection_only": selection_only,
     }
     (output_dir / "individual_manifest.json").write_text(
         json.dumps(manifest, indent=2, allow_nan=False),
@@ -359,8 +527,49 @@ def validate_args(args: argparse.Namespace) -> None:
         path = Path(getattr(args, name))
         if not path.is_file():
             raise FileNotFoundError(f"{name} not found: {path}")
+    selector_model = getattr(args, "selector_model", None)
+    if selector_model is not None and not Path(selector_model).is_file():
+        raise FileNotFoundError(f"selector_model not found: {selector_model}")
     if not Path(args.model_path).exists():
         raise FileNotFoundError(f"model_path not found: {args.model_path}")
+
+
+def _validate_selector_for_run(
+    artifact: FrozenSelectorArtifact,
+    frozen: FrozenInfluencePolicy,
+    args: argparse.Namespace,
+) -> None:
+    if artifact.target != frozen.target or artifact.desired_value != frozen.desired_value:
+        raise ValueError("selector target disagrees with influence graph")
+    if artifact.graph_sha256 != frozen.graph_sha256:
+        raise ValueError("selector graph digest disagrees with influence graph")
+    if artifact.classifier_sha256 != sha256_file(args.classifier_path):
+        raise ValueError("selector classifier digest disagrees with inference")
+    expected_generation = generation_policy_signature(args, frozen)
+    if artifact.generation_policy_signature != expected_generation:
+        raise ValueError("selector generation-policy signature disagrees with inference")
+    expected_features = selector_feature_signature(
+        args, frozen, artifact.candidate_region_sets
+    )
+    if artifact.feature_signature != expected_features:
+        raise ValueError("selector source-feature signature disagrees with inference")
+    if artifact.coverage_threshold != args.coverage_threshold:
+        raise ValueError("selector coverage threshold disagrees with inference")
+    development_ids = (
+        set(artifact.discovery_sample_ids)
+        | set(artifact.fit_sample_ids)
+        | set(artifact.calibration_sample_ids)
+    )
+    overlap = sorted(development_ids.intersection(args.sample_ids))
+    if overlap and not bool(getattr(args, "exploratory", False)):
+        raise ValueError(
+            "held-out sample IDs overlap selector development cohorts: "
+            f"{overlap}"
+        )
+    if artifact.evaluation_sample_ids and not set(args.sample_ids).issubset(
+        artifact.evaluation_sample_ids
+    ):
+        raise ValueError("run sample IDs are absent from selector evaluation cohort")
 
 
 def build_arg_parser() -> argparse.ArgumentParser:
@@ -380,6 +589,7 @@ def build_arg_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument("--model_path", default="checkpoints/sd2-1-base")
     parser.add_argument("--classifier_path", required=True)
+    parser.add_argument("--selector_model", default=None)
     parser.add_argument("--identity_model_path", required=True)
     parser.add_argument("--output_dir", required=True)
     parser.add_argument("--device", default="mps")
@@ -396,6 +606,9 @@ def build_arg_parser() -> argparse.ArgumentParser:
         default=".venv-ml/bin/python",
     )
     parser.add_argument("--discovery_manifest", default=None)
+    parser.add_argument("--selection_manifest", default=None)
+    parser.add_argument("--selection_only", action="store_true")
+    parser.add_argument("--exploratory", action="store_true")
     parser.add_argument("--continue_on_error", action="store_true")
     parser.add_argument("--dry_run", action="store_true")
     return parser
@@ -438,7 +651,7 @@ def _compute_source_saliency(
 
 
 def _selection_payload(
-    selection: IndividualRegionSelection,
+    selection: IndividualRegionSelection | RiskControlledSelection,
     *,
     sample_id: int,
     source_path: str | Path,
@@ -446,28 +659,96 @@ def _selection_payload(
     seed: int,
     frozen_policy: FrozenInfluencePolicy,
     execution_graph_path: str | Path,
+    selector_sha256: str | None = None,
 ) -> dict[str, Any]:
-    return {
+    payload = {
         "sample_id": sample_id,
         "source_path": str(source_path),
+        "source_sha256": sha256_file(source_path),
         "source_probability": source_probability,
         "seed": seed,
         "target": frozen_policy.target,
         "desired_value": frozen_policy.desired_value,
-        "available_regions": list(selection.available_regions),
-        "missing_regions": list(selection.missing_regions),
         "selected_regions": list(selection.selected_regions),
         "coverage": selection.coverage,
         "coverage_threshold": selection.coverage_threshold,
         "mask_fraction": selection.mask_fraction,
-        "region_importance": dict(selection.region_importance),
-        "candidate_count": selection.candidate_count,
         "fallback_used": selection.fallback_used,
         "fallback_reason": selection.fallback_reason,
         "selection_uses_generated_output": False,
         "influence_graph_sha256": frozen_policy.graph_sha256,
         "execution_graph_sha256": sha256_file(execution_graph_path),
     }
+    if isinstance(selection, RiskControlledSelection):
+        payload.update(
+            {
+                "selection_policy": "risk_controlled_source_only_v1",
+                "risk_threshold": selection.risk_threshold,
+                "safe_probability": selection.safe_probability,
+                "candidate_count": len(selection.candidate_scores),
+                "candidate_scores": [
+                    {
+                        "regions": list(score.regions),
+                        "coverage": score.coverage,
+                        "mask_fraction": score.mask_fraction,
+                        "raw_probability": score.raw_probability,
+                        "calibrated_probability": score.calibrated_probability,
+                        "global_mean_effect": score.globally_verified_effect,
+                        "feasible": score.feasible,
+                    }
+                    for score in selection.candidate_scores
+                ],
+                "selector_sha256": selector_sha256,
+            }
+        )
+    else:
+        payload.update(
+            {
+                "selection_policy": "coverage_only_legacy_v1",
+                "available_regions": list(selection.available_regions),
+                "missing_regions": list(selection.missing_regions),
+                "region_importance": dict(selection.region_importance),
+                "candidate_count": selection.candidate_count,
+            }
+        )
+    return payload
+
+
+def write_selection_manifest(
+    path: str | Path,
+    decisions: list[dict[str, Any]],
+    *,
+    frozen_policy: FrozenInfluencePolicy,
+    selector_sha256: str | None,
+    feature_signature: str | None,
+    generation_signature: str,
+) -> tuple[Path, str]:
+    """Finalize and hash all source-only decisions before generation."""
+
+    destination = Path(path)
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    unsigned = {
+        "version": 1,
+        "policy_type": (
+            "risk_controlled_source_only_v1"
+            if selector_sha256 is not None
+            else "coverage_only_legacy_v1"
+        ),
+        "target": frozen_policy.target,
+        "desired_value": frozen_policy.desired_value,
+        "influence_graph_sha256": frozen_policy.graph_sha256,
+        "selector_sha256": selector_sha256,
+        "feature_signature": feature_signature,
+        "generation_policy_signature": generation_signature,
+        "decisions": sorted(decisions, key=lambda row: row["sample_id"]),
+    }
+    digest = hashlib.sha256(_canonical_json_bytes(unsigned)).hexdigest()
+    payload = {**unsigned, "manifest_sha256": digest}
+    destination.write_text(
+        json.dumps(payload, sort_keys=True, indent=2, allow_nan=False) + "\n",
+        encoding="utf-8",
+    )
+    return destination, digest
 
 
 def _observation_payload(row: InterventionObservation) -> dict[str, Any]:

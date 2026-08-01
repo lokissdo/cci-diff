@@ -1,3 +1,4 @@
+import hashlib
 import json
 from argparse import Namespace
 from pathlib import Path
@@ -11,9 +12,19 @@ from cci_diff.counterfactual_graph import InterventionObservation
 from cci_diff.individual_region_selection import (
     load_frozen_influence_policy,
 )
+from cci_diff.risk_controlled_selection import (
+    FEATURE_NAMES,
+    FrozenSelectorArtifact,
+    LogisticModel,
+    PlattCalibrator,
+    RiskThreshold,
+    SafeSuccessThresholds,
+)
 from scripts.run_individual_region_cci import (
+    generation_policy_signature,
     prepare_individual_policy,
     run_individual_cci,
+    selector_feature_signature,
     source_requires_flip,
 )
 
@@ -67,6 +78,7 @@ def template_graph_payload():
 
 
 def influence_graph_payload(regions=("mouth", "lower_lip")):
+    candidates = (("mouth",), tuple(sorted(regions)))
     return {
         "version": 1,
         "type": "classifier_counterfactual_influence",
@@ -74,6 +86,9 @@ def influence_graph_payload(regions=("mouth", "lower_lip")):
         "target": "Smiling",
         "desired_value": 0,
         "selected_regions": list(regions),
+        "generation_regions": list(regions),
+        "candidate_region_sets": [list(item) for item in candidates],
+        "fallback_regions": list(regions),
         "verified_edges": [
             {
                 "source": "Smiling",
@@ -83,10 +98,24 @@ def influence_graph_payload(regions=("mouth", "lower_lip")):
             for region in regions
         ],
         "region_set_evidence": [
-            {"regions": [region], "mean_effect": 0.2}
+            {
+                "regions": [region],
+                "mean_effect": 0.2,
+                "flip_rate": 0.7,
+                "effect_ci_low": 0.05,
+                "mean_mask_fraction": 0.02,
+            }
             for region in regions
         ]
-        + [{"regions": list(regions), "mean_effect": 0.4}],
+        + [
+            {
+                "regions": list(regions),
+                "mean_effect": 0.4,
+                "flip_rate": 0.97,
+                "effect_ci_low": 0.15,
+                "mean_mask_fraction": 0.05,
+            }
+        ],
     }
 
 
@@ -120,6 +149,39 @@ def make_file_tree(tmp_path, sample_ids=(0,)):
     model = tmp_path / "sd2"
     model.mkdir()
     return template, influence, image_root, mask_root, classifier, identity, model
+
+
+def write_selector(path, args):
+    policy = load_frozen_influence_policy(args.influence_graph)
+    coefficients = (0.0,) * len(FEATURE_NAMES)
+    artifact = FrozenSelectorArtifact(
+        protocol_version=1,
+        target=policy.target,
+        desired_value=policy.desired_value,
+        graph_sha256=policy.graph_sha256,
+        candidate_region_sets=policy.candidate_region_sets,
+        fallback_regions=policy.fallback_regions,
+        feature_names=FEATURE_NAMES,
+        feature_signature=selector_feature_signature(args, policy),
+        classifier_sha256=hashlib.sha256(
+            Path(args.classifier_path).read_bytes()
+        ).hexdigest(),
+        generation_policy_signature=generation_policy_signature(args, policy),
+        model=LogisticModel(
+            mean=(0.0,) * len(FEATURE_NAMES),
+            scale=(1.0,) * len(FEATURE_NAMES),
+            intercept=4.0,
+            coefficients=coefficients,
+            l2=0.01,
+            iterations=1,
+        ),
+        calibrator=PlattCalibrator(0.0, 1.0, 1),
+        risk_calibration=RiskThreshold(0.8, 60, 0, 0.04),
+        coverage_threshold=0.8,
+        safe_success_thresholds=SafeSuccessThresholds(),
+    )
+    path.write_text(json.dumps(artifact.to_dict()), encoding="utf-8")
+    return path
 
 
 def test_source_requires_flip_uses_opposite_classifier_side():
@@ -265,3 +327,156 @@ def test_runner_calls_diffusion_at_most_once_per_image(monkeypatch, tmp_path):
         assert "candidate" not in joined
         assert "rerank" not in joined
         assert "retry" not in joined
+
+
+def test_adaptive_manifest_is_complete_before_any_generation(
+    monkeypatch, tmp_path
+):
+    (
+        template,
+        influence,
+        image_root,
+        mask_root,
+        classifier,
+        identity,
+        model,
+    ) = make_file_tree(tmp_path, sample_ids=(0, 1))
+    output_dir = tmp_path / "adaptive"
+    args = Namespace(
+        influence_graph=str(influence),
+        template_graph=str(template),
+        sample_ids=[0, 1],
+        coverage_threshold=0.8,
+        seed=42,
+        image_root=str(image_root),
+        mask_root=str(mask_root),
+        model_path=str(model),
+        classifier_path=str(classifier),
+        identity_model_path=str(identity),
+        output_dir=str(output_dir),
+        device="cpu",
+        classifier_input_size=4,
+        num_inference_steps=5,
+        guidance_scale=5.0,
+        blending_start_percentage=0.25,
+        generation_mask_dilation=0,
+        generation_mask_feather=3.0,
+        python_executable=".venv-ml/bin/python",
+        continue_on_error=False,
+        dry_run=False,
+        selection_only=False,
+        discovery_manifest=None,
+        exploratory=False,
+    )
+    args.selector_model = str(write_selector(tmp_path / "selector.json", args))
+    monkeypatch.setattr(
+        "scripts.run_individual_region_cci.load_celeba_resnet50",
+        lambda *args, **kwargs: object(),
+    )
+    monkeypatch.setattr(
+        "scripts.run_individual_region_cci._compute_source_saliency",
+        lambda *args, **kwargs: (
+            0.9,
+            np.array(
+                [
+                    [0.0, 0.0, 0.0, 0.0],
+                    [0.0, 1.0, 0.0, 0.0],
+                    [0.0, 0.2, 0.0, 0.0],
+                    [0.0, 0.0, 0.0, 0.0],
+                ]
+            ),
+        ),
+    )
+    commands = []
+
+    def fake_run(command, **kwargs):
+        manifest = json.loads(
+            (output_dir / "adaptive_selection_manifest.json").read_text()
+        )
+        assert len(manifest["decisions"]) == 2
+        assert len(manifest["manifest_sha256"]) == 64
+        commands.append(command)
+        return SimpleNamespace(returncode=0)
+
+    monkeypatch.setattr(
+        "scripts.run_individual_region_cci.subprocess.run", fake_run
+    )
+    monkeypatch.setattr(
+        "scripts.run_individual_region_cci.load_completed_observation",
+        lambda run_dir, **kwargs: InterventionObservation(
+            target="Smiling",
+            desired_value=0,
+            sample_id=kwargs["sample_id"],
+            seed=kwargs["seed"],
+            regions=kwargs["regions"],
+            source_probability=0.9,
+            output_probability=0.4,
+        ),
+    )
+
+    manifest = run_individual_cci(args)
+
+    assert len(commands) == 2
+    assert manifest["selection_count"] == 2
+    decisions = json.loads(
+        (output_dir / "adaptive_selection_manifest.json").read_text()
+    )["decisions"]
+    assert all("output_path" not in decision for decision in decisions)
+    assert all(decision["selected_regions"] == ["mouth"] for decision in decisions)
+
+
+def test_selection_only_writes_manifest_without_diffusion(monkeypatch, tmp_path):
+    (
+        template,
+        influence,
+        image_root,
+        mask_root,
+        classifier,
+        identity,
+        model,
+    ) = make_file_tree(tmp_path)
+    args = Namespace(
+        influence_graph=str(influence),
+        template_graph=str(template),
+        sample_ids=[0],
+        coverage_threshold=0.8,
+        seed=42,
+        image_root=str(image_root),
+        mask_root=str(mask_root),
+        model_path=str(model),
+        classifier_path=str(classifier),
+        identity_model_path=str(identity),
+        output_dir=str(tmp_path / "selection_only"),
+        device="cpu",
+        classifier_input_size=4,
+        num_inference_steps=5,
+        guidance_scale=5.0,
+        blending_start_percentage=0.25,
+        generation_mask_dilation=0,
+        generation_mask_feather=3.0,
+        python_executable=".venv-ml/bin/python",
+        continue_on_error=False,
+        dry_run=False,
+        selection_only=True,
+        discovery_manifest=None,
+        exploratory=False,
+    )
+    args.selector_model = str(write_selector(tmp_path / "selector.json", args))
+    monkeypatch.setattr(
+        "scripts.run_individual_region_cci.load_celeba_resnet50",
+        lambda *args, **kwargs: object(),
+    )
+    monkeypatch.setattr(
+        "scripts.run_individual_region_cci._compute_source_saliency",
+        lambda *args, **kwargs: (0.9, np.ones((4, 4))),
+    )
+    monkeypatch.setattr(
+        "scripts.run_individual_region_cci.subprocess.run",
+        lambda *args, **kwargs: pytest.fail("diffusion must not run"),
+    )
+
+    manifest = run_individual_cci(args)
+
+    assert manifest["attempted_generations"] == 0
+    assert manifest["selection_only"] is True
+    assert Path(manifest["selection_manifest_path"]).is_file()

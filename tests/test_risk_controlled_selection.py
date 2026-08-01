@@ -291,3 +291,36 @@ def test_selector_artifact_round_trip_and_digest_validation():
             policy,
             replace(restored, graph_sha256="f" * 64),
         )
+
+
+def test_selector_accepts_predeclared_subset_of_graph_candidates():
+    base = make_policy()
+    upper = ("upper_lip",)
+    policy = FrozenInfluencePolicy(
+        target=base.target,
+        desired_value=base.desired_value,
+        verified_regions=base.verified_regions,
+        fallback_regions=base.fallback_regions,
+        region_set_effects={**base.region_set_effects, upper: 0.10},
+        graph_path=base.graph_path,
+        graph_sha256=base.graph_sha256,
+        candidate_region_sets=(MOUTH, upper, PERIORAL),
+        region_set_evidence={
+            **base.region_set_evidence,
+            upper: FrozenRegionSetEvidence(0.10, 0.40, 0.02, 0.01),
+        },
+    )
+    artifact = replace(
+        make_artifact(base), candidate_region_sets=(MOUTH, PERIORAL)
+    )
+
+    selection = select_risk_controlled_regions(
+        (
+            make_row(MOUTH, coverage=0.90, area=0.02, effect=0.20),
+            make_row(PERIORAL, coverage=1.0, area=0.05, effect=0.35),
+        ),
+        policy,
+        artifact,
+    )
+
+    assert selection.selected_regions == MOUTH
