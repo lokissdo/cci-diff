@@ -5,7 +5,8 @@ from __future__ import annotations
 import hashlib
 import json
 import math
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, field
+from types import MappingProxyType
 from typing import Any, Iterable, Mapping, Sequence
 
 import numpy as np
@@ -343,7 +344,7 @@ def fit_logistic_newton(
             if not np.all(np.isfinite(candidate)):
                 raise ValueError("logistic fit produced a non-finite update")
             candidate_loss = _penalized_log_loss(design, y, candidate, l2)
-            if candidate_loss <= current_loss + 1e-14:
+            if candidate_loss <= current_loss:
                 beta = candidate
                 damping = max(damping / 10.0, 1e-12)
                 accepted = True
@@ -576,6 +577,9 @@ class FrozenSelectorArtifact:
     safe_success_thresholds: SafeSuccessThresholds
     fit_sample_ids: tuple[int, ...] = ()
     calibration_sample_ids: tuple[int, ...] = ()
+    discovery_sample_ids: tuple[int, ...] = ()
+    evaluation_sample_ids: tuple[int, ...] = ()
+    provenance: Mapping[str, Any] = field(default_factory=dict)
 
     def __post_init__(self) -> None:
         candidates = tuple(sorted({_canonical_regions(item) for item in self.candidate_region_sets}))
@@ -611,6 +615,31 @@ class FrozenSelectorArtifact:
             "calibration_sample_ids",
             tuple(sorted(set(self.calibration_sample_ids))),
         )
+        object.__setattr__(
+            self,
+            "discovery_sample_ids",
+            tuple(sorted(set(self.discovery_sample_ids))),
+        )
+        object.__setattr__(
+            self,
+            "evaluation_sample_ids",
+            tuple(sorted(set(self.evaluation_sample_ids))),
+        )
+        cohort_sets = (
+            set(self.discovery_sample_ids),
+            set(self.fit_sample_ids),
+            set(self.calibration_sample_ids),
+            set(self.evaluation_sample_ids),
+        )
+        if any(
+            cohort_sets[left] & cohort_sets[right]
+            for left in range(len(cohort_sets))
+            for right in range(left + 1, len(cohort_sets))
+        ):
+            raise ValueError("selector cohort sample IDs must be pairwise disjoint")
+        object.__setattr__(
+            self, "provenance", MappingProxyType(dict(self.provenance))
+        )
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -631,6 +660,9 @@ class FrozenSelectorArtifact:
             "safe_success_thresholds": asdict(self.safe_success_thresholds),
             "fit_sample_ids": list(self.fit_sample_ids),
             "calibration_sample_ids": list(self.calibration_sample_ids),
+            "discovery_sample_ids": list(self.discovery_sample_ids),
+            "evaluation_sample_ids": list(self.evaluation_sample_ids),
+            "provenance": dict(self.provenance),
         }
 
     @classmethod
@@ -657,6 +689,13 @@ class FrozenSelectorArtifact:
             calibration_sample_ids=tuple(
                 int(value) for value in payload.get("calibration_sample_ids", ())
             ),
+            discovery_sample_ids=tuple(
+                int(value) for value in payload.get("discovery_sample_ids", ())
+            ),
+            evaluation_sample_ids=tuple(
+                int(value) for value in payload.get("evaluation_sample_ids", ())
+            ),
+            provenance=dict(payload.get("provenance", {})),
         )
 
 
