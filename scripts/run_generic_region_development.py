@@ -220,7 +220,7 @@ class LocalDevelopmentBackend:
             self.args,
             sample_ids=list(sample_ids),
             candidate_regions=list(regions),
-            max_selected_regions=6,
+            max_selected_regions=4,
             output_dir=str(self.root / "screen"),
         )
         screen_regions(phase_args)

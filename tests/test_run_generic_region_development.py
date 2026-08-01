@@ -3,7 +3,10 @@ from argparse import Namespace
 from pathlib import Path
 
 from cci_diff.counterfactual_graph import InterventionObservation
-from scripts.run_generic_region_development import run_development
+from scripts.run_generic_region_development import (
+    LocalDevelopmentBackend,
+    run_development,
+)
 
 
 class FakeBackend:
@@ -145,3 +148,28 @@ def test_completed_run_rejects_changed_checkpoint_bytes(tmp_path):
         assert "configuration" in str(exc)
     else:
         raise AssertionError("changed checkpoint reused a completed run")
+
+
+def test_local_screening_respects_four_region_api_limit(tmp_path, monkeypatch):
+    args = args_for(tmp_path)
+    backend = LocalDevelopmentBackend(args)
+
+    def validating_screen_regions(phase_args):
+        assert phase_args.max_selected_regions <= 4
+        screen_dir = Path(phase_args.output_dir)
+        screen_dir.mkdir(parents=True, exist_ok=True)
+        (screen_dir / "screening_rows.csv").write_text(
+            "sample_id,region,captured_mass\n0,mouth,0.9\n",
+            encoding="utf-8",
+        )
+
+    monkeypatch.setattr(
+        "scripts.screen_counterfactual_regions.screen_regions",
+        validating_screen_regions,
+    )
+
+    rows = backend.screen(sample_ids=(0,), regions=("mouth",))
+
+    assert rows == [
+        {"sample_id": "0", "region": "mouth", "captured_mass": "0.9"}
+    ]
