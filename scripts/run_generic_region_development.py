@@ -25,7 +25,9 @@ from cci_diff.counterfactual_graph import (  # noqa: E402
 )
 from cci_diff.development_cohort import (  # noqa: E402
     DevelopmentCohort,
+    allocate_development_counts,
     assign_development_cohort,
+    order_candidate_ids_by_role,
 )
 from cci_diff.generic_region_discovery import (  # noqa: E402
     BeamSearchConfig,
@@ -110,22 +112,39 @@ class LocalDevelopmentBackend:
             score_classifier_image_grid,
         )
 
-        self.args.device = resolve_device(self.args.device, torch)
+        device = resolve_device(self.args.device, torch)
         graph = load_concept_graph(self.args.template_graph)
         label_index = resolve_celeba_attribute_index(
             graph.intervention.concept
         )
         classifier = load_celeba_resnet50(
             self.args.classifier_path,
-            device=self.args.device,
+            device=device,
             dtype=torch.float32,
         )
         detector = build_face_detector()
         excluded = set(evaluation_ids)
         accepted = []
         decisions = []
-        for sample_id in candidate_ids:
-            decision: dict[str, Any] = {"sample_id": sample_id}
+        ordered = order_candidate_ids_by_role(candidate_ids, seed)
+        required = allocate_development_counts(data_size)
+        scan_order = tuple(
+            (role, sample_id)
+            for role in ("discovery", "fit", "calibration")
+            for sample_id in ordered[role]
+        )
+        accepted_by_role = {
+            "discovery": 0,
+            "fit": 0,
+            "calibration": 0,
+        }
+        for role, sample_id in scan_order:
+            if accepted_by_role[role] >= getattr(required, role):
+                continue
+            decision: dict[str, Any] = {
+                "sample_id": sample_id,
+                "role_bucket": role,
+            }
             if sample_id in excluded:
                 decision.update(eligible=False, reason="evaluation_exclusion")
                 decisions.append(decision)
@@ -154,7 +173,7 @@ class LocalDevelopmentBackend:
                 classifier=classifier,
                 label_index=label_index,
                 input_size=self.args.classifier_input_size,
-                device=self.args.device,
+                device=device,
                 batch_size=1,
             )[0]
             direction_ok = source_requires_flip(
@@ -183,13 +202,11 @@ class LocalDevelopmentBackend:
             decisions.append(decision)
             if eligible:
                 accepted.append(sample_id)
-                try:
-                    assign_development_cohort(
-                        accepted, evaluation_ids, data_size, seed
-                    )
-                except ValueError:
-                    pass
-                else:
+                accepted_by_role[role] += 1
+                if all(
+                    accepted_by_role[name] >= getattr(required, name)
+                    for name in accepted_by_role
+                ):
                     break
         assign_development_cohort(accepted, evaluation_ids, data_size, seed)
         return tuple(accepted), decisions
@@ -669,6 +686,10 @@ def _configuration(
             configuration[f"{name}_sha256"] = sha256_file(
                 getattr(args, name)
             )
+    if hasattr(args, "model_path") and Path(args.model_path).exists():
+        configuration["model_content_sha256"] = _artifact_tree_sha256(
+            Path(args.model_path)
+        )
     return configuration
 
 
@@ -847,6 +868,22 @@ def _source_input_payload(
 
 def _ids_sha256(values: Iterable[int]) -> str:
     return _payload_sha256(sorted(set(int(value) for value in values)))
+
+
+def _artifact_tree_sha256(path: Path) -> str:
+    if path.is_file():
+        return sha256_file(path)
+    inventory = {
+        str(artifact.relative_to(path)): sha256_file(artifact)
+        for artifact in sorted(path.rglob("*"))
+        if artifact.is_file()
+        and artifact.name != "README.md"
+        and not any(
+            part.startswith(".")
+            for part in artifact.relative_to(path).parts
+        )
+    }
+    return _payload_sha256(inventory)
 
 
 def _payload_sha256(payload: Any) -> str:

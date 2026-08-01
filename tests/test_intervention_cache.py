@@ -16,6 +16,7 @@ def valid_inputs():
         "classifier_sha256": "d" * 64,
         "graph_sha256": "e" * 64,
         "policy_sha256": "f" * 64,
+        "sample_id": 7,
         "seed": 42,
     }
 
@@ -38,7 +39,7 @@ def test_cache_key_changes_for_every_scientific_input():
 
     for field in valid_inputs():
         changed = dict(valid_inputs())
-        changed[field] = 43 if field == "seed" else "0" * 64
+        changed[field] = 43 if field in {"seed", "sample_id"} else "0" * 64
         assert cache_key_for(**changed) != base
 
 

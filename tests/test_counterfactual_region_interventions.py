@@ -454,6 +454,27 @@ def test_second_content_addressed_run_skips_subprocess(tmp_path, monkeypatch):
     Image.new("RGB", (2, 2), "gray").save(source_root / "1.jpg")
     template = tmp_path / "template.json"
     template.write_text("{}", encoding="utf-8")
+    policy = tmp_path / "policy.json"
+    policy.write_text(
+        json.dumps(
+            {
+                "variant": "A11",
+                "hook": "clean_constraint",
+                "controller_mode": "trust_region",
+                "projection": True,
+                "num_inference_steps": 35,
+                "guidance_scale": 5.0,
+                "blending_start_percentage": 0.25,
+                "torch_dtype": "float32",
+                "post_attack": {
+                    "mode": "none",
+                    "epsilon_schedule": [],
+                    "boundary_margin": 0.03,
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
     calls = []
 
     monkeypatch.setattr(interventions, "validate_args", lambda args: None)
@@ -548,7 +569,7 @@ def test_second_content_addressed_run_skips_subprocess(tmp_path, monkeypatch):
             image_root=str(source_root),
             output_dir=str(output_dir),
             intervention_cache_dir=str(tmp_path / "cache"),
-            generation_policy=str(tmp_path / "policy.json"),
+            generation_policy=str(policy),
             stop_flip_rate=0.96,
             disable_early_stop=True,
             classifier_path="classifier",

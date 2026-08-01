@@ -508,6 +508,10 @@ def run_interventions(args: argparse.Namespace) -> dict[str, Any]:
     cache_static = (
         _cache_static_digests(args) if cache_root is not None else None
     )
+    policy_path = getattr(args, "generation_policy", None)
+    generation_policy = (
+        _load_a11_generation_policy(policy_path) if policy_path else None
+    )
     manifest = {
         "version": 2,
         "target": target,
@@ -561,16 +565,56 @@ def run_interventions(args: argparse.Namespace) -> dict[str, Any]:
         "template_graph_sha256": sha256_file(args.template_graph),
         "classifier_path": args.classifier_path,
         "identity_model_path": args.identity_model_path,
-        "model_path": args.model_path,
+        "model_path": (
+            str(generation_policy.get("checkpoint", args.model_path))
+            if generation_policy
+            else args.model_path
+        ),
         "device": args.device,
         "generation": {
-            "num_inference_steps": args.num_inference_steps,
-            "guidance_scale": args.guidance_scale,
-            "blending_start_percentage": args.blending_start_percentage,
-            "generation_mask_dilation": args.generation_mask_dilation,
-            "generation_mask_feather": args.generation_mask_feather,
+            "variant": "A11" if generation_policy else "legacy",
+            "controller_mode": (
+                generation_policy["controller_mode"]
+                if generation_policy
+                else "feedback"
+            ),
+            "num_inference_steps": (
+                generation_policy["num_inference_steps"]
+                if generation_policy
+                else args.num_inference_steps
+            ),
+            "guidance_scale": (
+                generation_policy["guidance_scale"]
+                if generation_policy
+                else args.guidance_scale
+            ),
+            "blending_start_percentage": (
+                generation_policy["blending_start_percentage"]
+                if generation_policy
+                else args.blending_start_percentage
+            ),
+            "generation_mask_dilation": (
+                generation_policy.get(
+                    "mask_dilation",
+                    generation_policy.get("generation_mask_dilation", 0),
+                )
+                if generation_policy
+                else args.generation_mask_dilation
+            ),
+            "generation_mask_feather": (
+                generation_policy.get(
+                    "mask_feather",
+                    generation_policy.get("generation_mask_feather", 3.0),
+                )
+                if generation_policy
+                else args.generation_mask_feather
+            ),
         },
-        "post_attack": "disabled",
+        "post_attack": (
+            generation_policy["post_attack"]
+            if generation_policy
+            else {"mode": "none"}
+        ),
         "generation_policy": getattr(args, "generation_policy", None),
         "intervention_cache_dir": (
             str(cache_root) if cache_root is not None else None
@@ -620,6 +664,7 @@ def run_interventions(args: argparse.Namespace) -> dict[str, Any]:
                             source=source,
                             union_mask=union_path,
                             graph=graph_path,
+                            sample_id=sample_id,
                             seed=seed,
                         )
                         if cache_static is not None
@@ -1002,6 +1047,7 @@ def _intervention_cache_key(
     source: Path,
     union_mask: Path,
     graph: Path,
+    sample_id: int,
     seed: int,
 ) -> InterventionCacheKey:
     return cache_key_for(
@@ -1012,6 +1058,7 @@ def _intervention_cache_key(
         identity_sha256=static["identity_sha256"],
         graph_sha256=sha256_file(graph),
         policy_sha256=static["policy_sha256"],
+        sample_id=sample_id,
         seed=seed,
     )
 

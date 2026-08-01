@@ -129,3 +129,19 @@ def test_interrupted_run_reuses_completed_phase_artifacts(tmp_path):
 
     assert result["phase"] == "complete"
     assert [call[0] for call in resumed_backend.calls] == ["fit"]
+
+
+def test_completed_run_rejects_changed_checkpoint_bytes(tmp_path):
+    args = args_for(tmp_path)
+    checkpoint = tmp_path / "checkpoint.bin"
+    checkpoint.write_bytes(b"first")
+    args.model_path = str(checkpoint)
+    run_development(args, backend=FakeBackend(tmp_path))
+    checkpoint.write_bytes(b"second")
+
+    try:
+        run_development(args, backend=FakeBackend(tmp_path))
+    except ValueError as exc:
+        assert "configuration" in str(exc)
+    else:
+        raise AssertionError("changed checkpoint reused a completed run")

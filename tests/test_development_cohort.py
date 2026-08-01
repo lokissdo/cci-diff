@@ -4,6 +4,7 @@ from cci_diff.development_cohort import (
     DevelopmentCounts,
     allocate_development_counts,
     assign_development_cohort,
+    order_candidate_ids_by_role,
 )
 
 
@@ -30,6 +31,16 @@ def test_larger_cohort_preserves_ids_in_each_role():
         assert set(getattr(small, role)).issubset(getattr(large, role))
     assert small.all_ids.isdisjoint(evaluation)
     assert large.all_ids.isdisjoint(evaluation)
+
+
+def test_candidate_role_order_matches_nested_cohort_order():
+    ordered = order_candidate_ids_by_role(range(10_000), 42)
+    cohort = assign_development_cohort(range(10_000), (), 30, 42)
+
+    for role in ("discovery", "fit", "calibration"):
+        assert getattr(cohort, role) == ordered[role][
+            : len(getattr(cohort, role))
+        ]
 
 
 def test_roles_are_pairwise_disjoint_and_serializable():

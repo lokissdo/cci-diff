@@ -98,6 +98,31 @@ def _role_for(seed: int, sample_id: int) -> str:
     return "calibration"
 
 
+def order_candidate_ids_by_role(
+    candidate_ids: Iterable[int], seed: int
+) -> dict[str, tuple[int, ...]]:
+    """Order source candidates so eligibility scans preserve nested prefixes."""
+
+    candidates = tuple(int(value) for value in candidate_ids)
+    if not candidates or len(candidates) != len(set(candidates)):
+        raise ValueError("candidate_ids must be non-empty and unique")
+    buckets: dict[str, list[int]] = {role: [] for role in _ROLES}
+    for sample_id in candidates:
+        buckets[_role_for(seed, sample_id)].append(sample_id)
+    return {
+        role: tuple(
+            sorted(
+                buckets[role],
+                key=lambda sample_id: (
+                    _digest(seed, f"order:{role}", sample_id),
+                    sample_id,
+                ),
+            )
+        )
+        for role in _ROLES
+    }
+
+
 def assign_development_cohort(
     eligible_ids: Iterable[int],
     evaluation_ids: Iterable[int],

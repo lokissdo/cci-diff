@@ -46,6 +46,7 @@ def cache_key_for(
     classifier_sha256: str,
     graph_sha256: str,
     policy_sha256: str,
+    sample_id: int,
     seed: int,
     identity_sha256: str | None = None,
 ) -> InterventionCacheKey:
@@ -64,9 +65,15 @@ def cache_key_for(
     for name, value in digests.items():
         if not isinstance(value, str) or not _DIGEST.fullmatch(value):
             raise ValueError(f"{name} must be a lowercase SHA-256 digest")
-    if isinstance(seed, bool) or not isinstance(seed, int):
-        raise ValueError("seed must be an integer")
-    payload: dict[str, object] = {"version": 1, **digests, "seed": seed}
+    for name, value in (("sample_id", sample_id), ("seed", seed)):
+        if isinstance(value, bool) or not isinstance(value, int):
+            raise ValueError(f"{name} must be an integer")
+    payload: dict[str, object] = {
+        "version": 1,
+        **digests,
+        "sample_id": sample_id,
+        "seed": seed,
+    }
     digest = hashlib.sha256(_canonical_json(payload)).hexdigest()
     return InterventionCacheKey(digest=digest, payload=payload)
 
