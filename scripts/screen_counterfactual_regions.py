@@ -31,6 +31,7 @@ from cci_diff.region_screening import (  # noqa: E402
     score_region_masks,
     select_saliency_covering_regions,
 )
+from cci_diff.runtime_environment import resolve_device  # noqa: E402
 
 
 def aggregate_screening_rows(
@@ -91,6 +92,7 @@ def screen_regions(args: argparse.Namespace) -> dict[str, Any]:
 
     import torch
 
+    args.device = resolve_device(args.device, torch)
     if len(args.sample_ids) != len(set(args.sample_ids)):
         raise ValueError("sample_ids must be unique")
     candidate_regions = tuple(
@@ -212,6 +214,7 @@ def screen_regions(args: argparse.Namespace) -> dict[str, Any]:
         },
         "classifier_path": args.classifier_path,
         "classifier_sha256": sha256_file(args.classifier_path),
+        "device": args.device,
         "template_graph": args.template_graph,
         "template_graph_sha256": sha256_file(args.template_graph),
         "ranking": summary,
@@ -263,7 +266,11 @@ def build_arg_parser() -> argparse.ArgumentParser:
         default="data/CelebAMask-HQ/CelebAMask-HQ-mask-anno",
     )
     parser.add_argument("--classifier_input_size", type=int, default=512)
-    parser.add_argument("--device", default="mps")
+    parser.add_argument(
+        "--device",
+        choices=("auto", "cuda", "mps", "cpu"),
+        default="auto",
+    )
     parser.add_argument("--output_dir", required=True)
     return parser
 

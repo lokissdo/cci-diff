@@ -535,6 +535,7 @@ def test_second_content_addressed_run_skips_subprocess(tmp_path, monkeypatch):
             blending_start_percentage=0.25,
             generation_mask_dilation=0,
             generation_mask_feather=3.0,
+            device="cpu",
             dry_run=False,
             continue_on_error=False,
         )

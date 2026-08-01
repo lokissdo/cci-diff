@@ -44,6 +44,7 @@ from cci_diff.risk_controlled_selection import (  # noqa: E402
     select_risk_controlled_regions,
     source_feature_signature,
 )
+from cci_diff.runtime_environment import resolve_device  # noqa: E402
 from scripts.run_counterfactual_region_interventions import (  # noqa: E402
     _prompt_for_graph,
     build_intervention_command,
@@ -339,6 +340,7 @@ def run_individual_cci(args: argparse.Namespace) -> dict[str, Any]:
     import torch
 
     validate_args(args)
+    args.device = resolve_device(args.device, torch)
     frozen = load_frozen_influence_policy(args.influence_graph)
     mask_manifest = _load_semantic_mask_manifest(args, frozen)
     template = load_concept_graph(args.template_graph)
@@ -382,6 +384,7 @@ def run_individual_cci(args: argparse.Namespace) -> dict[str, Any]:
         "target": frozen.target,
         "desired_value": frozen.desired_value,
         "label_index": label_index,
+        "device": args.device,
         "verified_regions": list(frozen.verified_regions),
         "fallback_regions": list(frozen.fallback_regions),
         "candidate_region_sets": [
@@ -818,7 +821,11 @@ def build_arg_parser() -> argparse.ArgumentParser:
     parser.add_argument("--semantic_mask_manifest", default=None)
     parser.add_argument("--identity_model_path", required=True)
     parser.add_argument("--output_dir", required=True)
-    parser.add_argument("--device", default="mps")
+    parser.add_argument(
+        "--device",
+        choices=("auto", "cuda", "mps", "cpu"),
+        default="auto",
+    )
     parser.add_argument("--classifier_input_size", type=int, default=512)
     parser.add_argument("--num_inference_steps", type=int, default=35)
     parser.add_argument("--guidance_scale", type=float, default=5.0)

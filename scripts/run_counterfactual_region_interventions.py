@@ -36,6 +36,7 @@ from cci_diff.region_screening import (  # noqa: E402
     canonical_region_sets,
     celebamask_component_path,
 )
+from cci_diff.runtime_environment import resolve_device  # noqa: E402
 from cci_diff.spatial_selection import measure_spatial_change  # noqa: E402
 
 
@@ -479,6 +480,9 @@ def summarize_cardinality(
 def run_interventions(args: argparse.Namespace) -> dict[str, Any]:
     """Execute or resume the requested paired intervention grid."""
 
+    import torch
+
+    args.device = resolve_device(getattr(args, "device", "auto"), torch)
     validate_args(args)
     template = load_concept_graph(args.template_graph)
     target = template.intervention.concept
@@ -557,6 +561,7 @@ def run_interventions(args: argparse.Namespace) -> dict[str, Any]:
         "classifier_path": args.classifier_path,
         "identity_model_path": args.identity_model_path,
         "model_path": args.model_path,
+        "device": args.device,
         "generation": {
             "num_inference_steps": args.num_inference_steps,
             "guidance_scale": args.guidance_scale,
@@ -835,7 +840,11 @@ def build_arg_parser() -> argparse.ArgumentParser:
         default=None,
         help="Shared content-addressed A11 cache (requires generation_policy).",
     )
-    parser.add_argument("--device", default="mps")
+    parser.add_argument(
+        "--device",
+        choices=("auto", "cuda", "mps", "cpu"),
+        default="auto",
+    )
     parser.add_argument(
         "--torch_dtype",
         choices=["auto", "float16", "float32"],
