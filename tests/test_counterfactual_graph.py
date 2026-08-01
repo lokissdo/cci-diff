@@ -263,22 +263,62 @@ def test_pareto_filter_removes_strictly_dominated_region_set():
     )
 
 
-def test_selection_uses_target_effect_per_area_independent_of_flip_threshold():
+def test_graph_exports_pareto_candidates_and_uses_flip_threshold_for_fallback():
     localized = evidence(
         ("mouth",), flip_rate=0.6, mean_effect=0.4, mask_fraction=0.04
     )
-    broad = evidence(
-        ("skin",), flip_rate=1.0, mean_effect=0.9, mask_fraction=0.30
+    reliable = evidence(
+        ("lower_lip", "mouth", "upper_lip"),
+        flip_rate=1.0,
+        mean_effect=0.9,
+        mask_fraction=0.12,
     )
-    candidates = {localized.regions: localized, broad.regions: broad}
+    candidates = {localized.regions: localized, reliable.regions: reliable}
 
-    low_threshold = select_region_set(candidates, required_flip_rate=0.01)
-    high_threshold = select_region_set(candidates, required_flip_rate=0.99)
+    result = build_influence_graph(
+        target="Smiling",
+        desired_value=0,
+        evidence_by_regions=candidates,
+        required_flip_rate=0.95,
+        minimum_samples=20,
+    )
 
     assert target_efficiency(localized) == pytest.approx(10.0)
-    assert target_efficiency(broad) == pytest.approx(3.0)
-    assert low_threshold.regions == ("mouth",)
-    assert high_threshold.regions == ("mouth",)
+    assert target_efficiency(reliable) == pytest.approx(7.5)
+    assert result.candidate_region_sets == (
+        ("lower_lip", "mouth", "upper_lip"),
+        ("mouth",),
+    )
+    assert result.fallback_regions == (
+        "lower_lip",
+        "mouth",
+        "upper_lip",
+    )
+    assert result.fallback_status == "meets_required_flip_rate"
+    assert result.selected_regions == result.fallback_regions
+
+
+def test_graph_marks_best_available_fallback_below_required_flip_rate():
+    mouth = evidence(
+        ("mouth",), flip_rate=0.70, mean_effect=0.4, mask_fraction=0.04
+    )
+    perioral = evidence(
+        ("lower_lip", "mouth", "upper_lip"),
+        flip_rate=0.89,
+        mean_effect=0.7,
+        mask_fraction=0.12,
+    )
+
+    result = build_influence_graph(
+        target="Smiling",
+        desired_value=0,
+        evidence_by_regions={mouth.regions: mouth, perioral.regions: perioral},
+        required_flip_rate=0.95,
+        minimum_samples=20,
+    )
+
+    assert result.fallback_regions == perioral.regions
+    assert result.fallback_status == "below_required_flip_rate"
 
 
 def test_selection_uses_deterministic_ties_after_target_efficiency():
@@ -381,12 +421,15 @@ def test_graph_serialization_only_verifies_supported_positive_singletons():
     assert payload["type"] == "classifier_counterfactual_influence"
     assert payload["selected_regions"] == ["mouth"]
     assert payload["generation_regions"] == ["mouth"]
-    assert payload["selection_status"] == "pareto_efficient"
+    assert payload["candidate_region_sets"] == [["mouth"]]
+    assert payload["fallback_regions"] == ["mouth"]
+    assert payload["fallback_status"] == "meets_required_flip_rate"
+    assert payload["selection_status"] == "adaptive_candidates_ready"
     assert payload["provenance"]["selection_rule"] == (
-        "pareto_target_efficiency_v1"
+        "risk_controlled_candidate_pool_v1"
     )
     assert payload["provenance"]["required_flip_rate_role"] == (
-        "legacy_compatibility_only"
+        "fallback_reliability_threshold"
     )
     evidence_rows = {
         tuple(item["regions"]): item
@@ -426,3 +469,5 @@ def test_graph_marks_nonpositive_selection_as_fallback():
 
     assert result.selected_regions == ("mouth",)
     assert result.selection_status == "fallback_nonpositive_effect"
+    assert result.candidate_region_sets == ()
+    assert result.fallback_status == "no_supported_candidate"

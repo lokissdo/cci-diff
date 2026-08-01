@@ -162,14 +162,19 @@ def _write_execution_graph(
 ) -> None:
     payload = json.loads(Path(template_path).read_text(encoding="utf-8"))
     payload["region"]["audit_role"] = "target_region"
-    payload["region"]["components"] = list(result.selected_regions)
+    payload["region"]["components"] = list(result.fallback_regions)
     payload["discovery"] = {
         "graph_type": "classifier_counterfactual_influence",
         "selection_status": result.selection_status,
-        "selection_rule": "pareto_target_efficiency_v1",
+        "selection_rule": "risk_controlled_candidate_pool_v1",
         "required_flip_rate": result.required_flip_rate,
-        "required_flip_rate_role": "legacy_compatibility_only",
-        "selected_regions": list(result.selected_regions),
+        "required_flip_rate_role": "fallback_reliability_threshold",
+        "candidate_region_sets": [
+            list(regions) for regions in result.candidate_region_sets
+        ],
+        "fallback_regions": list(result.fallback_regions),
+        "fallback_status": result.fallback_status,
+        "selected_regions": list(result.fallback_regions),
     }
     output_path.write_text(
         json.dumps(payload, indent=2, allow_nan=False),
@@ -178,16 +183,21 @@ def _write_execution_graph(
 
 
 def _render_report(result: InfluenceGraphResult) -> str:
-    selected = ", ".join(result.selected_regions)
+    selected = ", ".join(result.fallback_regions)
+    candidates = "; ".join(
+        "+".join(regions) for regions in result.candidate_region_sets
+    ) or "none"
     lines = [
         "# Counterfactual Influence Discovery",
         "",
         f"- Target: `{result.target}` -> `{result.desired_value}`",
-        f"- Selection: `{selected}`",
+        f"- Adaptive candidate sets: `{candidates}`",
+        f"- Reliable fallback: `{selected}`",
+        f"- Fallback status: `{result.fallback_status}`",
         f"- Status: `{result.selection_status}`",
-        "- Selection rule: `Pareto target-efficiency selection`",
-        "- Legacy required flip rate "
-        f"(not used for selection): `{result.required_flip_rate:.3f}`",
+        "- Selection rule: `risk-controlled candidate pool`",
+        "- Required fallback flip rate: "
+        f"`{result.required_flip_rate:.3f}`",
         f"- Verified singleton edges: `{len(result.verified_edges)}`",
         "",
         "The edges describe classifier-specific effects under the measured "

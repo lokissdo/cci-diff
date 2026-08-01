@@ -68,6 +68,11 @@ def test_read_and_discover_graph_writes_evidence_artifacts(tmp_path):
         (tmp_path / "analysis" / "influence_graph.json").read_text()
     )
     assert payload["selected_regions"] == ["mouth"]
+    assert payload["candidate_region_sets"] == [
+        ["lower_lip", "mouth"],
+        ["mouth"],
+    ]
+    assert payload["fallback_regions"] == ["mouth"]
     assert "mouth" in {
         edge["target"] for edge in payload["verified_edges"]
     }
@@ -85,14 +90,17 @@ def test_read_and_discover_graph_writes_evidence_artifacts(tmp_path):
         ).read_text()
     )
     assert execution["discovery"]["selection_rule"] == (
-        "pareto_target_efficiency_v1"
+        "risk_controlled_candidate_pool_v1"
     )
     assert execution["discovery"]["required_flip_rate_role"] == (
-        "legacy_compatibility_only"
+        "fallback_reliability_threshold"
+    )
+    assert execution["discovery"]["candidate_region_sets"] == (
+        payload["candidate_region_sets"]
     )
     report = (tmp_path / "analysis" / "discovery_report.md").read_text()
-    assert "Pareto target-efficiency selection" in report
-    assert "Legacy required flip rate" in report
+    assert "Adaptive candidate sets" in report
+    assert "Reliable fallback" in report
 
 
 def test_screening_summary_reports_robust_heatmap_statistics():

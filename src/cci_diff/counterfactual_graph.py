@@ -128,6 +128,9 @@ class InfluenceGraphResult:
     target: str
     desired_value: int
     selected_regions: RegionTuple
+    candidate_region_sets: tuple[RegionTuple, ...]
+    fallback_regions: RegionTuple
+    fallback_status: str
     selection_status: str
     required_flip_rate: float
     minimum_samples: int
@@ -143,8 +146,13 @@ class InfluenceGraphResult:
             "graph_type": "classifier_counterfactual_influence",
             "target": self.target,
             "desired_value": self.desired_value,
-            "selected_regions": list(self.selected_regions),
-            "generation_regions": list(self.selected_regions),
+            "candidate_region_sets": [
+                list(regions) for regions in self.candidate_region_sets
+            ],
+            "fallback_regions": list(self.fallback_regions),
+            "fallback_status": self.fallback_status,
+            "selected_regions": list(self.fallback_regions),
+            "generation_regions": list(self.fallback_regions),
             "selection_status": self.selection_status,
             "required_flip_rate": self.required_flip_rate,
             "minimum_samples": self.minimum_samples,
@@ -373,6 +381,83 @@ def select_region_set(
     )
 
 
+def eligible_candidate_region_sets(
+    evidence: Iterable[RegionSetEvidence],
+    minimum_samples: int,
+) -> tuple[RegionTuple, ...]:
+    """Return supported positive Pareto sets eligible for source selection."""
+
+    if minimum_samples <= 0:
+        raise ValueError("minimum_samples must be positive")
+    supported = tuple(
+        item
+        for item in evidence
+        if item.sample_count >= minimum_samples
+        and _is_selection_eligible(item)
+        and item.mean_effect > 0.0
+        and math.isfinite(item.effect_ci_low)
+        and item.effect_ci_low > 0.0
+    )
+    frontier = tuple(
+        item
+        for item in supported
+        if not any(
+            _dominates(other, item)
+            for other in supported
+            if other.regions != item.regions
+        )
+    )
+    return tuple(sorted(item.regions for item in frontier))
+
+
+def select_reliable_fallback(
+    evidence: Iterable[RegionSetEvidence],
+    *,
+    required_flip_rate: float,
+    minimum_samples: int,
+) -> tuple[RegionSetEvidence | None, str]:
+    """Choose the smallest reliable candidate, or the strongest available."""
+
+    _validate_probability("required_flip_rate", required_flip_rate)
+    items = tuple(evidence)
+    candidate_sets = set(
+        eligible_candidate_region_sets(items, minimum_samples)
+    )
+    candidates = tuple(
+        item for item in items if item.regions in candidate_sets
+    )
+    if not candidates:
+        return None, "no_supported_candidate"
+    reliable = tuple(
+        item for item in candidates if item.flip_rate >= required_flip_rate
+    )
+    if reliable:
+        return (
+            min(
+                reliable,
+                key=lambda item: (
+                    float(item.mean_mask_fraction),
+                    -item.mean_effect,
+                    -item.flip_rate,
+                    item.regions,
+                ),
+            ),
+            "meets_required_flip_rate",
+        )
+    return (
+        min(
+            candidates,
+            key=lambda item: (
+                -item.flip_rate,
+                -item.mean_effect,
+                float(item.mean_mask_fraction),
+                item.regions,
+            ),
+        ),
+        "below_required_flip_rate",
+    )
+
+
 def build_influence_graph(
     *,
     target: str,
@@ -390,7 +475,16 @@ def build_influence_graph(
         raise ValueError("desired_value must be 0 or 1")
     if minimum_samples <= 0:
         raise ValueError("minimum_samples must be positive")
-    selected = select_region_set(
+    _validate_probability("required_flip_rate", required_flip_rate)
+    candidate_region_sets = eligible_candidate_region_sets(
+        evidence_by_regions.values(), minimum_samples
+    )
+    fallback, fallback_status = select_reliable_fallback(
+        evidence_by_regions.values(),
+        required_flip_rate=required_flip_rate,
+        minimum_samples=minimum_samples,
+    )
+    selected = fallback or select_region_set(
         evidence_by_regions, required_flip_rate=required_flip_rate
     )
     annotated_evidence = annotate_region_sets(evidence_by_regions)
@@ -411,17 +505,20 @@ def build_influence_graph(
     result_provenance = dict(provenance or {})
     result_provenance.update(
         {
-            "selection_rule": "pareto_target_efficiency_v1",
-            "required_flip_rate_role": "legacy_compatibility_only",
+            "selection_rule": "risk_controlled_candidate_pool_v1",
+            "required_flip_rate_role": "fallback_reliability_threshold",
         }
     )
     return InfluenceGraphResult(
         target=target,
         desired_value=desired_value,
         selected_regions=selected.regions,
+        candidate_region_sets=candidate_region_sets,
+        fallback_regions=selected.regions,
+        fallback_status=fallback_status,
         selection_status=(
-            "pareto_efficient"
-            if selected.mean_effect > 0.0
+            "adaptive_candidates_ready"
+            if candidate_region_sets
             else "fallback_nonpositive_effect"
         ),
         required_flip_rate=required_flip_rate,
