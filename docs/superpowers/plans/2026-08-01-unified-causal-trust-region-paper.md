@@ -288,7 +288,11 @@ git commit -m "docs: align CCI experiments with unified method"
 Run:
 
 ```bash
-.venv-ml/bin/python -m unittest tests.test_build_cci_paper_metrics tests.test_cci_trust_region -v
+.venv-ml/bin/python -m pytest -q \
+  tests/test_build_cci_paper_metrics.py \
+  tests/test_trust_region_solver.py \
+  tests/test_trust_region_controller.py \
+  tests/test_sd2_clean_cci.py
 ```
 
 Expected: all tests pass.
@@ -343,4 +347,3 @@ Expected: a non-empty PDF with the new title, unified framework text, and pendin
 git add -f paper/cci_trust_region.tex paper/cci_trust_region.pdf
 git commit -m "docs: publish unified causal CCI paper"
 ```
-
