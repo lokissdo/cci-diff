@@ -281,7 +281,7 @@ exact helper interfaces:
             "settings": {
                 "image_size": 512,
                 "overlay_alpha": 0.45,
-                "crop_scale": 4.0,
+                "crop_scale": 1.75,
                 "minimum_crop_side": 128,
             },
             "samples": records,
@@ -320,7 +320,7 @@ Implementation requirements:
    to 512 by 512 single-channel using NEAREST.
 5. Produce a magenta mask overlay with alpha 0.45 only inside the binary mask.
 6. Derive a square crop centered on the mask bounding box with side
-   max(128, 4 * max(width, height)), clipped to the image, then resize the crop
+   max(128, 1.75 * max(width, height)), clipped to the image, then resize the crop
    to 512 by 512 using LANCZOS.
 7. Save deterministic, paper-owned source, overlay, full-output, and crop files
    using five-digit sample IDs.

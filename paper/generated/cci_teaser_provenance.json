@@ -1,0 +1,174 @@
+{
+  "settings": {
+    "image_size": 512,
+    "overlay_alpha": 0.45,
+    "overlay_color": [
+      220,
+      32,
+      96
+    ],
+    "crop_scale": 1.75,
+    "minimum_crop_side": 128
+  },
+  "samples": [
+    {
+      "sample_id": 10429,
+      "crop_box": [
+        182,
+        302,
+        336,
+        456
+      ],
+      "inputs": {
+        "source": {
+          "path": "/Users/hung.domodec.com/my-docs/cci-diff/data/CelebAMask-HQ/CelebA-HQ-img/10429.jpg",
+          "sha256": "7dc0579ec6af0cadbeaf3b50b3b2c1d9ffecec8dd8b24709729662b84e476a92"
+        },
+        "semantic_mask": {
+          "path": "/Users/hung.domodec.com/my-docs/cci-diff/outputs/attacked_a0_a11_smile300_seed42/mouth/smile/10429/A11/semantic_mask.png",
+          "sha256": "fc82441942b71a1bf21d2983abfae818d968aa27c04801fe5c01e7a460a68ca6"
+        },
+        "bld": {
+          "path": "/Users/hung.domodec.com/my-docs/cci-diff/outputs/attacked_a0_a11_smile300_seed42/mouth/smile/10429/A0/candidates/d8/sd2_bld_grid_corrected.png",
+          "sha256": "02bfb0a631bb889ccbf29774d87c540b51c083955e9ef345d0ef638cc4a4bc6c"
+        },
+        "adaptive": {
+          "path": "/Users/hung.domodec.com/my-docs/cci-diff/outputs/attacked_a0_a11_smile300_seed42/mouth/smile/10429/A11/candidates/d8/sd2_bld_grid_corrected.png",
+          "sha256": "c2273c45b4957ae3440f2dd9624316d41b6c25a8b2e78cf7713440dcc3a06f9d"
+        }
+      },
+      "outputs": {
+        "source": {
+          "path": "/Users/hung.domodec.com/my-docs/cci-diff/paper/figures/cci_teaser/10429_source.jpg",
+          "sha256": "52a4205c992256e9b7071f88e314f43c44ada6556a215efeaa54f4b8c1d695dd"
+        },
+        "mask_overlay": {
+          "path": "/Users/hung.domodec.com/my-docs/cci-diff/paper/figures/cci_teaser/10429_mask_overlay.png",
+          "sha256": "b3b0e5f6c327fb22d015f5118e2832fc51d40cc8c7c411cfb59de310c8a94e16"
+        },
+        "bld": {
+          "path": "/Users/hung.domodec.com/my-docs/cci-diff/paper/figures/cci_teaser/10429_bld.jpg",
+          "sha256": "63cf22d31072b8a89ff4164d0a81c0b888f11620c760c21e6bd052d7c8737d70"
+        },
+        "ours": {
+          "path": "/Users/hung.domodec.com/my-docs/cci-diff/paper/figures/cci_teaser/10429_ours.jpg",
+          "sha256": "d78f27ac04d48138978ab17499581189b7be9f8b84893bc2ebb6b0f0874f4285"
+        },
+        "bld_crop": {
+          "path": "/Users/hung.domodec.com/my-docs/cci-diff/paper/figures/cci_teaser/10429_bld_crop.png",
+          "sha256": "e6a77da57e4abbacef6555c9666ce8ca5d96f87163ddd12abb88274b48009d7c"
+        },
+        "ours_crop": {
+          "path": "/Users/hung.domodec.com/my-docs/cci-diff/paper/figures/cci_teaser/10429_ours_crop.png",
+          "sha256": "a98d3810e9f087a9b074c20f695168b88100cc2dbc1c0bd9a1b2177caffdd3f9"
+        }
+      }
+    },
+    {
+      "sample_id": 18004,
+      "crop_box": [
+        151,
+        278,
+        360,
+        487
+      ],
+      "inputs": {
+        "source": {
+          "path": "/Users/hung.domodec.com/my-docs/cci-diff/data/CelebAMask-HQ/CelebA-HQ-img/18004.jpg",
+          "sha256": "9a03d4ed7b979b3f5d1820980d26732a0589a6ab90ecff6ff8bf5267e0e3d85c"
+        },
+        "semantic_mask": {
+          "path": "/Users/hung.domodec.com/my-docs/cci-diff/outputs/attacked_a0_a11_smile300_seed42/mouth/smile/18004/A11/semantic_mask.png",
+          "sha256": "ed26563c1aace66cb5259fe1c66a4e57012634b6f38f926deaaf49399ca0bfbd"
+        },
+        "bld": {
+          "path": "/Users/hung.domodec.com/my-docs/cci-diff/outputs/attacked_a0_a11_smile300_seed42/mouth/smile/18004/A0/candidates/d8/sd2_bld_grid_corrected.png",
+          "sha256": "6a77b82eb500981dbcc282771de52320770ba4d1ddc8fcf75665becf7931d1a6"
+        },
+        "adaptive": {
+          "path": "/Users/hung.domodec.com/my-docs/cci-diff/outputs/attacked_a0_a11_smile300_seed42/mouth/smile/18004/A11/candidates/d8/sd2_bld_grid_corrected.png",
+          "sha256": "c07c699fcc32044f8aeb4e4608207828b79ee48583e936f6d25f90ceccc02314"
+        }
+      },
+      "outputs": {
+        "source": {
+          "path": "/Users/hung.domodec.com/my-docs/cci-diff/paper/figures/cci_teaser/18004_source.jpg",
+          "sha256": "1876afa47742ad08cafdadb45deedf38c1d6c901ba0c6425f9a39c893b039b71"
+        },
+        "mask_overlay": {
+          "path": "/Users/hung.domodec.com/my-docs/cci-diff/paper/figures/cci_teaser/18004_mask_overlay.png",
+          "sha256": "c95397894edc8517defb62b68463bf8a046a14f7ebd3ec5e5e83c9a96ac1ac01"
+        },
+        "bld": {
+          "path": "/Users/hung.domodec.com/my-docs/cci-diff/paper/figures/cci_teaser/18004_bld.jpg",
+          "sha256": "bd8f916feee667465df15f6f8619c410578c218631daefaa29ffc2edd77c5575"
+        },
+        "ours": {
+          "path": "/Users/hung.domodec.com/my-docs/cci-diff/paper/figures/cci_teaser/18004_ours.jpg",
+          "sha256": "bac65f3629f5dc0a8a8b7f481836b969af014b7d0404fda64ac0738810f89785"
+        },
+        "bld_crop": {
+          "path": "/Users/hung.domodec.com/my-docs/cci-diff/paper/figures/cci_teaser/18004_bld_crop.png",
+          "sha256": "5b4621e7650bc7c05392f019f1f0d48cb3276f07267de928a2201b427f45e7c9"
+        },
+        "ours_crop": {
+          "path": "/Users/hung.domodec.com/my-docs/cci-diff/paper/figures/cci_teaser/18004_ours_crop.png",
+          "sha256": "57056b197a2540ed4a9bf4073e3e116fde470ac27d342e495841a9dbf3a6d12d"
+        }
+      }
+    },
+    {
+      "sample_id": 28408,
+      "crop_box": [
+        174,
+        307,
+        344,
+        477
+      ],
+      "inputs": {
+        "source": {
+          "path": "/Users/hung.domodec.com/my-docs/cci-diff/data/CelebAMask-HQ/CelebA-HQ-img/28408.jpg",
+          "sha256": "2c5fd5db07e165f16ecfe17b87df2380d8ca0261e70247dd7e2d195ac4fd40f9"
+        },
+        "semantic_mask": {
+          "path": "/Users/hung.domodec.com/my-docs/cci-diff/outputs/attacked_a0_a11_smile300_seed42/mouth/smile/28408/A11/semantic_mask.png",
+          "sha256": "bfbe32d22c8e0cae3d7aa45bf20517287a7b9d52649ad48bd4c8dc2b32f47c50"
+        },
+        "bld": {
+          "path": "/Users/hung.domodec.com/my-docs/cci-diff/outputs/attacked_a0_a11_smile300_seed42/mouth/smile/28408/A0/candidates/d8/sd2_bld_grid_corrected.png",
+          "sha256": "899a4aa16840cd32f8387e39d3fb6feea623d25614faf4d50b0d52a3e52031db"
+        },
+        "adaptive": {
+          "path": "/Users/hung.domodec.com/my-docs/cci-diff/outputs/attacked_a0_a11_smile300_seed42/mouth/smile/28408/A11/candidates/d8/sd2_bld_grid_corrected.png",
+          "sha256": "c9875bcebe69c0a169acb456a213b3ad80770e637bba263cfee447c69832d67a"
+        }
+      },
+      "outputs": {
+        "source": {
+          "path": "/Users/hung.domodec.com/my-docs/cci-diff/paper/figures/cci_teaser/28408_source.jpg",
+          "sha256": "3ff2eca8497d58e8bd8fafdaa1a886fb1d6cc23a81b601368b91f108b5da5d30"
+        },
+        "mask_overlay": {
+          "path": "/Users/hung.domodec.com/my-docs/cci-diff/paper/figures/cci_teaser/28408_mask_overlay.png",
+          "sha256": "1dd319cd69bd8a4993cb572b0dfd748e1fcd640014b0098066b6f5ce5a55e4c4"
+        },
+        "bld": {
+          "path": "/Users/hung.domodec.com/my-docs/cci-diff/paper/figures/cci_teaser/28408_bld.jpg",
+          "sha256": "6e48f0f42d86386713cbadbb188cdb76fb0c9f83f9f0909d8c00230f916e985b"
+        },
+        "ours": {
+          "path": "/Users/hung.domodec.com/my-docs/cci-diff/paper/figures/cci_teaser/28408_ours.jpg",
+          "sha256": "f7533b33fc3974aac9ba4deeacad711bd2bae2c2aeb7df91695cce68427c7ae9"
+        },
+        "bld_crop": {
+          "path": "/Users/hung.domodec.com/my-docs/cci-diff/paper/figures/cci_teaser/28408_bld_crop.png",
+          "sha256": "1e022a945680a7707dc742e18e8dc9791ae77f5770bee1cfce89ab8ab27d9a42"
+        },
+        "ours_crop": {
+          "path": "/Users/hung.domodec.com/my-docs/cci-diff/paper/figures/cci_teaser/28408_ours_crop.png",
+          "sha256": "f5831787c5f58bf85b6aad0f879896ff79bd45f4bb80bbd4cb769813745c43ad"
+        }
+      }
+    }
+  ]
+}
