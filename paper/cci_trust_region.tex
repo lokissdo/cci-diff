@@ -9,6 +9,7 @@
 \usepackage{microtype}
 \usepackage{tikz}
 \usetikzlibrary{arrows.meta,positioning,fit,calc}
+\usepackage{placeins}
 \usepackage[hidelinks]{hyperref}
 \usepackage[font=small,labelfont=bf]{caption}
 
@@ -90,62 +91,73 @@ then determines how to change it. Target progress is primary, identity and
 outside-mask locality form the best attainable safety envelope, and
 non-target drift is reduced only inside that envelope.
 
-Figure~\ref{fig:teaser} visualizes the resulting image-to-image explanation.
-The edited expression is localized to the mouth while facial identity and
-background remain visually stable. These panels are directly exported from
-the paired evaluation, not synthesized or retouched for presentation.
+Figure~\ref{fig:overview} visualizes the complete method. Offline controlled
+interventions establish which semantic regions can affect the classifier;
+online source evidence resolves that policy into a mask before adaptive CCI
+generates the localized counterfactual. The image panels are directly exported
+from the paired evaluation, not synthesized or retouched for presentation.
 
 \begin{figure*}[t]
 \centering
-\setlength{\tabcolsep}{3pt}
-\begin{tabular}{c@{\hspace{4pt}$\longrightarrow$\hspace{4pt}}c@{\hspace{4pt}$\longrightarrow$\hspace{4pt}}c@{\hspace{4pt}$\longrightarrow$\hspace{4pt}}c}
-\begin{minipage}[t]{.205\textwidth}\centering
-\includegraphics[width=\linewidth]{figures/cci_teaser/10429_source.jpg}\\[-1pt]
-\textbf{Source}
-\end{minipage} &
-\begin{minipage}[t]{.205\textwidth}\centering
-\includegraphics[width=\linewidth]{figures/cci_teaser/10429_mask_overlay.png}\\[-1pt]
-\textbf{\shortstack{Semantic\\intervention mask}}
-\end{minipage} &
-\begin{minipage}[t]{.205\textwidth}\centering
-\includegraphics[width=\linewidth]{figures/cci_teaser/10429_bld.jpg}\\[-1pt]
-\textbf{BLD}
-\end{minipage} &
-\begin{minipage}[t]{.205\textwidth}\centering
-\includegraphics[width=\linewidth]{figures/cci_teaser/10429_ours.jpg}\\[-1pt]
-\textbf{Ours}
-\end{minipage} \\
-\end{tabular}
+\resizebox{0.96\textwidth}{!}{%
+\begin{tikzpicture}[
+  >=Latex,
+  box/.style={draw,rounded corners=2pt,align=center,font=\scriptsize,
+              minimum width=27mm,minimum height=9mm,inner sep=2.5pt},
+  discovery/.style={box,fill=orange!10},
+  generation/.style={box,fill=blue!8},
+  output/.style={draw,rounded corners=2pt,inner sep=0pt},
+  band/.style={draw,dashed,rounded corners=3pt,inner sep=5pt},
+  link/.style={->,thick},
+  transfer/.style={->,thick,dashed,purple!70!black}
+]
+\node[discovery] (images) at (0,3.25) {Discovery\\images};
+\node[discovery,right=6mm of images] (proposals) {Grad-CAM++\\proposals};
+\node[discovery,right=6mm of proposals] (pairs) {Paired same-seed\\region interventions};
+\node[discovery,right=6mm of pairs] (graph) {Frozen influence\\graph};
 
-\vspace{3pt}
-\begin{tabular}{cccc}
-\begin{minipage}[t]{.205\textwidth}\centering
-\includegraphics[width=\linewidth]{figures/cci_teaser/18004_bld.jpg}\\[-1pt]
-\textbf{BLD}
-\end{minipage} &
-\begin{minipage}[t]{.205\textwidth}\centering
-\includegraphics[width=\linewidth]{figures/cci_teaser/18004_ours.jpg}\\[-1pt]
-\textbf{Ours}
-\end{minipage} &
-\begin{minipage}[t]{.205\textwidth}\centering
-\includegraphics[width=\linewidth]{figures/cci_teaser/28408_bld.jpg}\\[-1pt]
-\textbf{BLD}
-\end{minipage} &
-\begin{minipage}[t]{.205\textwidth}\centering
-\includegraphics[width=\linewidth]{figures/cci_teaser/28408_ours.jpg}\\[-1pt]
-\textbf{Ours}
-\end{minipage} \\
-\end{tabular}
-\caption{\textbf{Localized counterfactuals from evaluated images.} Top: an
-input image is paired with its fixed mouth semantic intervention mask
-(magenta), then processed
-by raw \bld{} and the proposed adaptive CCI. Bottom: two additional paired
-outputs. Within every pair, source, semantic mask, prompt, seed, scheduler,
-attack, and generation settings are identical. The method changes classifier
-evidence inside the mouth while retaining a natural, recognizable face; the
-aggregate comparison is reported in Table~\ref{tab:end-to-end}. Images are
-unaltered evaluation artifacts apart from resizing and the mask overlay.}
-\label{fig:teaser}
+\node[output]
+  (source) at (0,0) {\includegraphics[width=27mm]{figures/cci_teaser/10429_source.jpg}};
+\node[output,right=9mm of source]
+  (mask) {\includegraphics[width=27mm]{figures/cci_teaser/10429_mask_overlay.png}};
+\node[generation,right=9mm of mask,minimum width=36mm,minimum height=17mm]
+  (cci) {Predicted-clean VAE measurements\\$\rightarrow$ lexicographic trust-region CCI\\$\rightarrow$ final latent restoration};
+\node[output,right=9mm of cci]
+  (counterfactual) {\includegraphics[width=27mm]{figures/cci_teaser/10429_ours.jpg}};
+\node[font=\scriptsize\bfseries,below=1.5mm of source] (source-label)
+  {Source image};
+\node[font=\scriptsize\bfseries,align=center,below=1.5mm of mask] (mask-label)
+  {Selected semantic mask\\(magenta support)};
+\node[font=\scriptsize\bfseries,below=1.5mm of counterfactual] (counterfactual-label)
+  {Counterfactual};
+
+\draw[link] (images) -- (proposals);
+\draw[link] (proposals) -- (pairs);
+\draw[link] (pairs) -- (graph);
+\draw[link] (source) -- (mask);
+\draw[link] (mask) -- (cci);
+\draw[link] (cci) -- (counterfactual);
+
+\node[band,fit=(images)(proposals)(pairs)(graph),
+      label={[font=\small\bfseries]above:Classifier-Causal Mask Discovery}] {};
+\node[band,fit=(source)(mask)(cci)(counterfactual)(source-label)(mask-label)(counterfactual-label),
+      label={[font=\small\bfseries,fill=white,inner sep=1pt]above:Localized Trust-Region Counterfactual Generation}]
+      (generation-band) {};
+\draw[transfer] (graph.south) to[out=-90,in=90]
+  node[midway,right,font=\scriptsize,fill=white,inner sep=1pt]
+  {verified region policy} ([xshift=-7mm]generation-band.north east);
+\node[font=\scriptsize,below=1.5mm of generation-band,align=center]
+  {Interventional scope: frozen classifier--generator system};
+\end{tikzpicture}%
+}
+\caption{\textbf{End-to-end method overview.} The offline discovery stage
+turns saliency proposals into a verified classifier-specific influence graph.
+For a new source, the frozen policy determines the semantic intervention mask;
+predicted-clean lexicographic guidance and final latent restoration then
+produce one localized counterfactual. The real image panels are unretouched
+evaluation artifacts apart from resizing and the magenta mask overlay. Causal
+claims are limited to the frozen classifier--generator system.}
+\label{fig:overview}
 \end{figure*}
 
 Our contributions are:
@@ -224,7 +236,7 @@ semantic region causes an attribute in people or in the physical world.
 \subsection{Overall Framework}
 \label{sec:framework}
 
-Figure~\ref{fig:framework} summarizes the complete method. A discovery cohort
+Figure~\ref{fig:overview} summarizes the complete method. A discovery cohort
 is processed once to screen semantic candidates, estimate controlled
 intervention effects, and freeze a reusable influence graph. For each new
 source, the graph and source Grad-CAM++ evidence select one minimal verified
@@ -234,49 +246,6 @@ explanatory support; the latter provides smooth latent support for gradients
 and \bld{} blending. Predicted-clean lexicographic guidance, DDIM sampling,
 source blending, and final latent restoration then generate one audited
 counterfactual without expanding the chosen region.
-
-\begin{figure*}[t]
-\centering
-\resizebox{0.97\textwidth}{!}{%
-\begin{tikzpicture}[
-  >=Latex,
-  box/.style={draw,rounded corners=2pt,align=center,font=\scriptsize,
-              minimum width=21mm,minimum height=9mm,inner sep=2.5pt},
-  discovery/.style={box,fill=orange!10},
-  generation/.style={box,fill=blue!8},
-  output/.style={box,fill=green!10},
-  link/.style={->,thick}
-]
-\node[discovery] (images) {Discovery\\images};
-\node[discovery,right=5mm of images] (proposals) {Grad-CAM++\\proposals};
-\node[discovery,right=5mm of proposals] (pairs) {Paired region\\interventions};
-\node[discovery,right=5mm of pairs] (graph) {Verified influence\\graph};
-\node[generation,right=7mm of graph] (support) {Source-specific\\semantic support};
-\node[generation,right=5mm of support] (cci) {Predicted-clean\\trust-region CCI};
-\node[output,right=5mm of cci] (cf) {Localized\\counterfactual};
-
-\draw[link] (images) -- (proposals);
-\draw[link] (proposals) -- (pairs);
-\draw[link] (pairs) -- (graph);
-\draw[link] (graph) -- (support);
-\draw[link] (support) -- (cci);
-\draw[link] (cci) -- (cf);
-
-\node[draw,dashed,rounded corners=3pt,fit=(images)(proposals)(pairs)(graph),
-      inner sep=5pt,label={[font=\small\bfseries]above:Classifier-Causal Mask Discovery}] {};
-\node[draw,dashed,rounded corners=3pt,fit=(support)(cci)(cf),
-      inner sep=5pt,label={[font=\small\bfseries]above:Localized Counterfactual Generation}] {};
-\node[font=\scriptsize,below=7mm of graph,align=center]
-      {Interventional scope: frozen classifier--generator system};
-\end{tikzpicture}%
-}
-\caption{\textbf{Overall framework.} Controlled region interventions turn
-saliency-screened components into a reusable influence graph. For a new source,
-the graph determines where editing is permitted; adaptive trust-region CCI
-determines how to edit within that fixed support. Discovery and generation are
-connected stages of one method, rather than independently selected pipelines.}
-\label{fig:framework}
-\end{figure*}
 
 \subsection{Classifier-Causal Mask Discovery}
 \label{sec:discovery}
@@ -443,8 +412,8 @@ again because VAE decoding and quantization can move a boundary-adjacent result.
 \label{sec:protocol}
 
 \paragraph{Data and task.}
-We evaluate $N=300$ eligible CelebAMask-HQ sources
-\cite{liu2015celeba,lee2020maskgan} for smile removal
+We evaluate $N=300$ eligible CelebA-HQ images with CelebAMask-HQ semantic
+annotations~\cite{liu2015celeba,lee2020maskgan} for smile removal
 (\texttt{Smiling} $1\!\rightarrow\!0$). Source IDs are sampled once and paired
 exactly across methods. The benchmark fixes the semantic mouth component for
 every pair, isolating counterfactual optimization after semantic-support
@@ -523,13 +492,98 @@ specific claim: adaptive target-first control substantially improves the
 desired classifier intervention while preserving perceptual quality and
 reducing correlation-based collateral change.
 
+\begin{table*}[t]
+\centering
+\scriptsize
+\setlength{\tabcolsep}{4.1pt}
+\caption{Published CelebA-HQ Smile context reported by
+MaskDiME~\cite{guo2026maskdime}. The upper block transcribes its $256^2$
+benchmark values; the final row reports our $512^2$ attacked CelebA-HQ
+protocol with CelebAMask-HQ annotations using generated macros. Because
+protocols and sFID estimators differ,
+the separator denotes cross-protocol context rather than a controlled ranking.
+FVA and FR are percentages.}
+\label{tab:published-celebahq}
+\begin{tabular}{lrrrrrrrr}
+\toprule
+Method & FID $\downarrow$ & sFID $\downarrow$ & FVA $\uparrow$ & FS $\uparrow$ &
+MNAC $\downarrow$ & CD $\downarrow$ & COUT $\uparrow$ & FR (\%) $\uparrow$ \\
+\midrule
+\multicolumn{9}{l}{\emph{Published MaskDiME CelebA-HQ protocol}} \\
+DiVE & 107.0 & -- & 35.7 & -- & 7.41 & -- & -- & -- \\
+STEEX & 21.9 & -- & 97.6 & -- & 5.27 & -- & -- & -- \\
+DiME & 18.10 & 27.7 & 96.7 & 0.67 & 2.63 & 1.82 & 0.65 & 97.0 \\
+ACE $\ell_1$ & 3.21 & 20.2 & 100.0 & 0.89 & 1.56 & 2.61 & 0.55 & 95.0 \\
+ACE $\ell_2$ & 6.93 & 22.0 & 100.0 & 0.84 & 1.87 & 2.21 & 0.60 & 95.0 \\
+LDCE-txt & 13.6 & 25.8 & 99.1 & 0.76 & 2.44 & 1.68 & 0.34 & -- \\
+TiME & 10.98 & 23.8 & 96.6 & 0.79 & 2.97 & 2.32 & 0.63 & 97.1 \\
+RCSB & 3.04 & 20.0 & 100.0 & 0.93 & 1.22 & 3.22 & 0.83 & 98.9 \\
+MaskDiME & 2.51 & 18.1 & 100.0 & 0.94 & 1.41 & 2.67 & 0.69 & 99.4 \\
+\midrule
+\multicolumn{9}{l}{\emph{Our attacked CelebA-HQ protocol}} \\
+\method{} (Ours)
+ & \EndToEndAdaptiveFID
+ & \EndToEndAdaptiveSymmetricFID
+ & \EndToEndAdaptiveFVAPct
+ & \EndToEndAdaptiveFS
+ & \EndToEndAdaptiveMNAC
+ & \EndToEndAdaptiveCD
+ & \EndToEndAdaptiveCOUT
+ & \EndToEndAdaptiveFRPct \\
+\bottomrule
+\end{tabular}
+\end{table*}
+
+\paragraph{Published benchmark context.}
+Table~\ref{tab:published-celebahq} positions our verified result beside the
+CelebA-HQ Smile block reported by MaskDiME, but the values are not a
+head-to-head experiment. MaskDiME reports ten-repeat split-FID under its
+$256^2$ CelebA-HQ protocol, whereas our sFID is
+deterministic two-direction split-FID under a $512^2$ attacked CelebA-HQ protocol with CelebAMask-HQ
+annotations. Resolution,
+classifier, cohort construction, attack, and generation settings also differ.
+The table is therefore cross-protocol context; Table~\ref{tab:end-to-end}
+remains the controlled comparison that isolates adaptive CCI.
+
 \subsection{Qualitative Results}
 
-Figure~\ref{fig:teaser} complements the aggregate metrics with direct paired
+\begin{figure*}[t]
+\centering
+\setlength{\tabcolsep}{2pt}
+\begin{tabular}{cc@{\hspace{10pt}}cc@{\hspace{10pt}}cc}
+\multicolumn{2}{c}{\textbf{Sample 10429}} &
+\multicolumn{2}{c}{\textbf{Sample 18004}} &
+\multicolumn{2}{c}{\textbf{Sample 28408}} \\
+\includegraphics[width=.14\textwidth]{figures/cci_teaser/10429_bld.jpg} &
+\includegraphics[width=.14\textwidth]{figures/cci_teaser/10429_ours.jpg} &
+\includegraphics[width=.14\textwidth]{figures/cci_teaser/18004_bld.jpg} &
+\includegraphics[width=.14\textwidth]{figures/cci_teaser/18004_ours.jpg} &
+\includegraphics[width=.14\textwidth]{figures/cci_teaser/28408_bld.jpg} &
+\includegraphics[width=.14\textwidth]{figures/cci_teaser/28408_ours.jpg} \\
+\textbf{BLD} & \textbf{Ours} & \textbf{BLD} & \textbf{Ours} &
+\textbf{BLD} & \textbf{Ours} \\[2pt]
+\includegraphics[width=.14\textwidth]{figures/cci_teaser/10429_bld_crop.png} &
+\includegraphics[width=.14\textwidth]{figures/cci_teaser/10429_ours_crop.png} &
+\includegraphics[width=.14\textwidth]{figures/cci_teaser/18004_bld_crop.png} &
+\includegraphics[width=.14\textwidth]{figures/cci_teaser/18004_ours_crop.png} &
+\includegraphics[width=.14\textwidth]{figures/cci_teaser/28408_bld_crop.png} &
+\includegraphics[width=.14\textwidth]{figures/cci_teaser/28408_ours_crop.png} \\
+\multicolumn{6}{c}{\scriptsize Aligned mouth details} \\
+\end{tabular}
+\caption{\textbf{Paired qualitative comparison.} Within each pair, raw
+\bld{} and adaptive CCI share the source, semantic mask, prompt, seed,
+scheduler, localized attack, and generation settings. Full faces are shown so
+the localized mouth edit can be judged together with identity and background
+preservation; aligned mouth details expose the target evidence at print scale.
+Images are unretouched evaluation artifacts apart from resizing and cropping.}
+\label{fig:qualitative}
+\end{figure*}
+
+Figure~\ref{fig:qualitative} complements the aggregate metrics with direct paired
 comparisons. Raw \bld{} already confines the edit spatially, but its generated
 mouth can retain stronger smile evidence. Adaptive CCI produces a more neutral
 mouth while leaving face shape, hair, clothing, and background visually
-stable. The full-face panels are intentionally shown rather than only mouth
+stable. Full-face panels are shown alongside, rather than replaced by, mouth
 crops: locality is meaningful only when the edited region is judged in the
 context of the complete identity. Because every panel comes from the evaluated
 cohort and shares the pair's source and settings, the visualization illustrates
@@ -557,6 +611,7 @@ more than raw \bld{}. Finally, face images and identity embeddings are biometric
 data; the intended use is consented model auditing with appropriate data
 protection.
 
+\FloatBarrier
 \section{Conclusions}
 
 We presented a unified framework in which intervention-verified localization
