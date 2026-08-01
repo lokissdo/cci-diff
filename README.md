@@ -188,12 +188,12 @@ execution policy:
   --output_dir outputs/smile_counterfactual_graph
 ```
 
-The selected region set first has to satisfy the requested generation
-classifier flip rate. Among passing sets, selection minimizes semantic mask
-area, outside-mask change, total changed area, non-target drift, identity loss,
-and region count in that order. Online constraint weights remain
-residual-driven; graph discovery does not predict a permanent loss-weight
-vector.
+Discovery exports every supported positive Pareto candidate plus a reliable
+fallback. `required_flip_rate` is the fallback reliability threshold; it is
+not a license for a low-success tiny mask to become the inference default.
+Per-image adaptive selection is fitted and calibrated separately as described
+below. Online constraint weights remain residual-driven; graph discovery does
+not predict a permanent loss-weight vector.
 
 The full 100-discovery/100-held-out smile workflow is resumable:
 
@@ -319,6 +319,133 @@ retained as failures; the runner does not expand the mask, generate
 alternatives, rerank outputs, or apply post-generation attack. Pass
 `--discovery_manifest` to reject accidental overlap between discovery and
 held-out IDs.
+
+## Risk-controlled source-only mask selection
+
+The risk-controlled selector chooses the smallest candidate only after it
+passes both source saliency coverage and calibrated joint target, identity,
+and locality risk gates. The initial smile family is `mouth` versus
+`mouth + upper_lip + lower_lip`, but the implementation is generic across
+binary labels and desired directions. A selector artifact is specific to its
+target, direction, classifier, influence graph, semantic preprocessing, and
+generation policy.
+
+Oracle metrics are evaluation-only. The independent oracle, FID, sFID, FVA,
+FS, MNAC, CD, COUT, generated probabilities, post-attack outcomes, and output
+paths cannot enter discovery-time source features, selector fitting features,
+calibration decisions, or inference ranking. A0 and A11 reuse the same frozen
+source decision. The selector writes and hashes the complete decision manifest
+before either direct generation or fixed-output replay can read a result.
+
+Four sample-ID roles are pairwise disjoint: graph discovery, selector fitting,
+selector calibration, and held-out evaluation. For the existing 300-image
+fixed-mask run, prepare a predeclared 40/80/100/80 split and export only
+discovery interventions and fit/calibration outcomes:
+
+```bash
+.venv-ml/bin/python scripts/prepare_adaptive_replay_data.py \
+  --candidate_results mouth=outputs/attacked_a0_a11_smile300_seed42/mouth/pilot_results.csv \
+  --candidate_results lower_lip+mouth+upper_lip=outputs/attacked_a0_a11_smile300_seed42/mouth_upper_lower_lip/pilot_results.csv \
+  --sample_ids_manifest outputs/attacked_a0_a11_smile300_seed42/mouth/pilot_manifest.json \
+  --discovery_count 40 \
+  --fit_count 80 \
+  --calibration_count 100 \
+  --evaluation_count 80 \
+  --random_seed 42 \
+  --variant A11 \
+  --output_dir outputs/attacked_a0_a11_smile300_seed42/adaptive_prepared
+```
+
+Build the candidate graph from the discovery IDs only:
+
+```bash
+.venv-ml/bin/python scripts/discover_counterfactual_graph.py \
+  --results outputs/attacked_a0_a11_smile300_seed42/adaptive_prepared/discovery_interventions.csv \
+  --template_graph examples/graphs/remove_smile_clean_cci.json \
+  --required_flip_rate 0.95 \
+  --minimum_samples 40 \
+  --output_dir outputs/attacked_a0_a11_smile300_seed42/adaptive_graph
+```
+
+Compute the eight source-only features for all IDs. This mode loads the source
+classifier, Grad-CAM++, and segmentation masks, but performs no selection and
+no diffusion:
+
+```bash
+.venv-ml/bin/python scripts/run_individual_region_cci.py \
+  --influence_graph outputs/attacked_a0_a11_smile300_seed42/adaptive_graph/influence_graph.json \
+  --template_graph examples/graphs/remove_smile_clean_cci.json \
+  --sample_ids $(.venv-ml/bin/python -c 'import json; d=json.load(open("outputs/attacked_a0_a11_smile300_seed42/adaptive_prepared/split_manifest.json")); print(*sum(d["cohorts"].values(), []))') \
+  --model_path checkpoints/sd2-1-base \
+  --classifier_path models/resnet50_multilabel_model.pth \
+  --identity_model_path models/facenet_vggface2.ts \
+  --generation_policy_manifest examples/replay_smile_a11_policy.json \
+  --source_features_only \
+  --output_dir outputs/attacked_a0_a11_smile300_seed42/adaptive_source_features \
+  --device mps
+```
+
+Fit coefficients on the fit IDs, calibrate on the calibration IDs, choose the
+lowest risk threshold with at least 60 accepted non-fallback rows and a
+one-sided 95% Wilson failure upper bound no larger than 0.05, then freeze the
+artifact:
+
+```bash
+.venv-ml/bin/python scripts/fit_region_selector.py \
+  --influence_graph outputs/attacked_a0_a11_smile300_seed42/adaptive_graph/influence_graph.json \
+  --source_features outputs/attacked_a0_a11_smile300_seed42/adaptive_source_features/selector_source_features.csv \
+  --development_outcomes outputs/attacked_a0_a11_smile300_seed42/adaptive_prepared/development_outcomes.csv \
+  --source_feature_manifest outputs/attacked_a0_a11_smile300_seed42/adaptive_source_features/source_feature_manifest.json \
+  --split_manifest outputs/attacked_a0_a11_smile300_seed42/adaptive_prepared/split_manifest.json \
+  --discovery_ids outputs/attacked_a0_a11_smile300_seed42/adaptive_prepared/discovery_ids.json \
+  --evaluation_ids outputs/attacked_a0_a11_smile300_seed42/adaptive_prepared/evaluation_ids.json \
+  --output_dir outputs/attacked_a0_a11_smile300_seed42/adaptive_selector
+```
+
+Select masks for the 80 held-out sources. `--selection_only` finalizes the
+manifest without launching diffusion:
+
+```bash
+.venv-ml/bin/python scripts/run_individual_region_cci.py \
+  --influence_graph outputs/attacked_a0_a11_smile300_seed42/adaptive_graph/influence_graph.json \
+  --template_graph examples/graphs/remove_smile_clean_cci.json \
+  --sample_ids $(.venv-ml/bin/python -c 'import json; print(*json.load(open("outputs/attacked_a0_a11_smile300_seed42/adaptive_prepared/evaluation_ids.json"))["sample_ids"])') \
+  --model_path checkpoints/sd2-1-base \
+  --classifier_path models/resnet50_multilabel_model.pth \
+  --identity_model_path models/facenet_vggface2.ts \
+  --generation_policy_manifest examples/replay_smile_a11_policy.json \
+  --selector_model outputs/attacked_a0_a11_smile300_seed42/adaptive_selector/selector_model.json \
+  --selection_only \
+  --output_dir outputs/attacked_a0_a11_smile300_seed42/adaptive_heldout_selections \
+  --device mps
+```
+
+Join each frozen decision to the already-generated post-attack A0 and A11
+rows. `materialize_adaptive_region_cohort.py` never imports the diffusion
+runner:
+
+```bash
+.venv-ml/bin/python scripts/materialize_adaptive_region_cohort.py \
+  --selection_manifest outputs/attacked_a0_a11_smile300_seed42/adaptive_heldout_selections/adaptive_selection_manifest.json \
+  --candidate_results mouth=outputs/attacked_a0_a11_smile300_seed42/mouth/pilot_results.csv \
+  --candidate_results lower_lip+mouth+upper_lip=outputs/attacked_a0_a11_smile300_seed42/mouth_upper_lower_lip/pilot_results.csv \
+  --selector_model outputs/attacked_a0_a11_smile300_seed42/adaptive_selector/selector_model.json \
+  --evaluation_ids outputs/attacked_a0_a11_smile300_seed42/adaptive_prepared/evaluation_ids.json \
+  --expected_count 80 \
+  --expected_variants A0 A11 \
+  --output_dir outputs/attacked_a0_a11_smile300_seed42/adaptive_heldout
+```
+
+`adaptive_results.csv` and its compatibility alias `pilot_results.csv` can be
+passed to the existing metric scripts. Report selected area, mouth-selection
+rate, fallback rate, safe-success by mask, and runtime alongside FID, sFID,
+FVA, FS, MNAC, CD, COUT, and FR. These final metrics evaluate the frozen
+policy; they never tune its per-image ranking.
+
+An all-300 replay is useful only as a diagnostic because 220 of those IDs were
+used for discovery, fitting, or calibration. Run selection and materialization
+with `--exploratory`; every resulting report must be titled `NOT HELD-OUT` and
+must not be used as the paper's primary quantitative claim.
 
 ## Dry-Run The Legacy SD2 Bridge
 

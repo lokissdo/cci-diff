@@ -678,7 +678,7 @@ def _validate_selector_for_run(
         )
     if artifact.evaluation_sample_ids and not set(args.sample_ids).issubset(
         artifact.evaluation_sample_ids
-    ):
+    ) and not bool(getattr(args, "exploratory", False)):
         raise ValueError("run sample IDs are absent from selector evaluation cohort")
 
 

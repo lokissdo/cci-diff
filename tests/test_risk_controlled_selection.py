@@ -1,6 +1,7 @@
 import json
 import math
 from dataclasses import replace
+from pathlib import Path
 
 import numpy as np
 import pytest
@@ -324,3 +325,12 @@ def test_selector_accepts_predeclared_subset_of_graph_candidates():
     )
 
     assert selection.selected_regions == MOUTH
+
+
+def test_readme_documents_source_only_selector_and_oracle_boundary():
+    text = Path("README.md").read_text(encoding="utf-8")
+    assert "Risk-controlled source-only mask selection" in text
+    assert "Oracle metrics are evaluation-only" in text
+    assert "prepare_adaptive_replay_data.py" in text
+    assert "materialize_adaptive_region_cohort.py" in text
+    assert "NOT HELD-OUT" in text

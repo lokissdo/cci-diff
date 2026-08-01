@@ -289,7 +289,9 @@ def _read_ids(path: str | Path) -> tuple[int, ...]:
     if "features" in payload:
         values = []
         for feature in payload["features"].values():
-            values.extend(feature.get("sample_ids", ()))
+            values.extend(
+                feature.get("sample_ids", feature.get("selected_ids", ()))
+            )
         return tuple(int(value) for value in values)
     raise ValueError("sample ID manifest has no recognized ID list")
 

@@ -183,7 +183,7 @@ def _validate_selector_cohorts(
         )
     if artifact.evaluation_sample_ids and not sample_ids.issubset(
         artifact.evaluation_sample_ids
-    ):
+    ) and not exploratory:
         raise ValueError("materialized IDs are absent from selector evaluation cohort")
     return "exploratory_not_held_out" if overlap else "held_out_verified"
 

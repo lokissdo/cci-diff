@@ -1,0 +1,29 @@
+{
+  "version": 1,
+  "name": "attacked_smile_a11_seed42",
+  "target": "Smiling",
+  "desired_value": 0,
+  "variant": "A11",
+  "checkpoint": "checkpoints/sd2-1-base",
+  "prompt": "(photo-realistic:1.2), ultra-high-resolution portrait of the same person, remove smiling: relaxed neutral facial expression, closed relaxed lips, no smile, preserve identity, natural expression, detailed skin texture, soft cinematic lighting",
+  "seed": 42,
+  "num_inference_steps": 35,
+  "guidance_scale": 5.0,
+  "blending_start_percentage": 0.25,
+  "mask_dilation": 8,
+  "hook": "clean_constraint",
+  "controller_mode": "trust_region",
+  "projection": true,
+  "post_attack": {
+    "mode": "smooth_boundary",
+    "epsilon_schedule": [
+      0.05,
+      0.08,
+      0.1,
+      0.3,
+      0.5
+    ],
+    "boundary_margin": 0.03
+  },
+  "classifier_sha256": "9387f298caab711a4e8e354f5bc5492f77e8755f11f585385da9240338f3788c"
+}

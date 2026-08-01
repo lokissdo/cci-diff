@@ -4,7 +4,10 @@ from pathlib import Path
 
 import pytest
 
-from scripts.prepare_adaptive_replay_data import prepare_adaptive_replay_data
+from scripts.prepare_adaptive_replay_data import (
+    _read_ids,
+    prepare_adaptive_replay_data,
+)
 
 
 MOUTH = ("mouth",)
@@ -127,3 +130,15 @@ def test_preparation_is_deterministic_for_same_seed(tmp_path):
     assert (tmp_path / "first/development_outcomes.csv").read_bytes() == (
         tmp_path / "second/development_outcomes.csv"
     ).read_bytes()
+
+
+def test_read_ids_supports_clean_pilot_selected_ids_manifest(tmp_path):
+    path = tmp_path / "pilot_manifest.json"
+    path.write_text(
+        json.dumps(
+            {"features": {"smile": {"selected_ids": [7, 3, 9]}}}
+        ),
+        encoding="utf-8",
+    )
+
+    assert _read_ids(path) == (7, 3, 9)

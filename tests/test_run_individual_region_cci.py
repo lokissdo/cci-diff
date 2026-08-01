@@ -151,7 +151,7 @@ def make_file_tree(tmp_path, sample_ids=(0,)):
     return template, influence, image_root, mask_root, classifier, identity, model
 
 
-def write_selector(path, args):
+def write_selector(path, args, *, evaluation_ids=()):
     policy = load_frozen_influence_policy(args.influence_graph)
     coefficients = (0.0,) * len(FEATURE_NAMES)
     artifact = FrozenSelectorArtifact(
@@ -179,6 +179,7 @@ def write_selector(path, args):
         risk_calibration=RiskThreshold(0.8, 60, 0, 0.04),
         coverage_threshold=0.8,
         safe_success_thresholds=SafeSuccessThresholds(),
+        evaluation_sample_ids=tuple(evaluation_ids),
     )
     path.write_text(json.dumps(artifact.to_dict()), encoding="utf-8")
     return path
@@ -509,9 +510,13 @@ def test_selection_only_writes_manifest_without_diffusion(monkeypatch, tmp_path)
         dry_run=False,
         selection_only=True,
         discovery_manifest=None,
-        exploratory=False,
+        exploratory=True,
     )
-    args.selector_model = str(write_selector(tmp_path / "selector.json", args))
+    args.selector_model = str(
+        write_selector(
+            tmp_path / "selector.json", args, evaluation_ids=(99,)
+        )
+    )
     monkeypatch.setattr(
         "scripts.run_individual_region_cci.load_celeba_resnet50",
         lambda *args, **kwargs: object(),
